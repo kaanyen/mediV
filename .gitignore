@@ -7,6 +7,29 @@
 # Local temp artifacts
 /backend/temp/
 
+# Local .env file (should not be committed)
+.env
+
+# Local .env.local file (should not be committed)
+.env.local  
+
+# Local .env.development file (should not be committed)
+.env.development
+
+# Local .env.production file (should not be committed)
+.env.production
+
+# Local .env.test file (should not be committed)
+.env.test
+
+# Local .env.test.local file (should not be committed)
+.env.test.local
+
+#venv
+backend/.venv/
+
+
+
 # Python caches
 __pycache__/
 *.py[cod]
@@ -16,3 +39,5 @@ __pycache__/
 **/.DS_Store
 
 
+/backend/.venv
+/backend/.venv
