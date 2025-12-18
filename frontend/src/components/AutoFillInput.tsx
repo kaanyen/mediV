@@ -4,16 +4,20 @@ type Props = {
   label: string;
   value: string;
   isAiFilled: boolean;
+  onChange?: (next: string) => void;
+  placeholder?: string;
 };
 
-export default function AutoFillInput({ label, value, isAiFilled }: Props) {
+export default function AutoFillInput({ label, value, isAiFilled, onChange, placeholder }: Props) {
   return (
     <div className="space-y-1">
       <div className="text-sm font-medium text-slate-700">{label}</div>
       <div className="relative">
         <input
           value={value}
-          readOnly
+          onChange={onChange ? (e) => onChange(e.target.value) : undefined}
+          readOnly={!onChange}
+          placeholder={placeholder}
           className={[
             "w-full rounded-lg border px-3 py-2 text-slate-900 outline-none transition",
             "placeholder:text-slate-400",
