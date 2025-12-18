@@ -6,8 +6,10 @@ import { addPatient, getAllPatients, getEncountersByStatus, makeId } from "../se
 
 type Column = {
   title: string;
-  status: EncounterStatus;
+  status: NurseColumnStatus;
 };
+
+type NurseColumnStatus = Exclude<EncounterStatus, "results_ready">;
 
 const columns: Column[] = [
   { title: "Waiting for Consult", status: "waiting_for_consult" },
@@ -33,7 +35,7 @@ function formatWait(iso: string, now = Date.now()): string {
 export default function NurseHome() {
   const navigate = useNavigate();
 
-  const [encountersByStatus, setEncountersByStatus] = useState<Record<EncounterStatus, Encounter[]>>({
+  const [encountersByStatus, setEncountersByStatus] = useState<Record<NurseColumnStatus, Encounter[]>>({
     waiting_for_consult: [],
     in_consult: [],
     waiting_for_lab: [],
@@ -50,11 +52,12 @@ export default function NurseHome() {
   const [nowTick, setNowTick] = useState(() => Date.now());
 
   const refresh = async () => {
-    const [patients, waiting, inConsult, waitingLab, discharged] = await Promise.all([
+    const [patients, waiting, inConsult, waitingLab, resultsReady, discharged] = await Promise.all([
       getAllPatients(),
       getEncountersByStatus("waiting_for_consult"),
       getEncountersByStatus("in_consult"),
       getEncountersByStatus("waiting_for_lab"),
+      getEncountersByStatus("results_ready"),
       getEncountersByStatus("discharged")
     ]);
 
@@ -65,7 +68,8 @@ export default function NurseHome() {
     setEncountersByStatus({
       waiting_for_consult: waiting,
       in_consult: inConsult,
-      waiting_for_lab: waitingLab,
+      // Nurse board still has 4 columns; treat results_ready as part of "Waiting for Lab"
+      waiting_for_lab: [...resultsReady, ...waitingLab],
       discharged
     });
   };

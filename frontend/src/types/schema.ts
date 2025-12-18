@@ -2,6 +2,7 @@ export type EncounterStatus =
   | "waiting_for_consult"
   | "in_consult"
   | "waiting_for_lab"
+  | "results_ready"
   | "discharged";
 
 export interface Patient {
@@ -23,8 +24,13 @@ export interface Encounter {
     spo2: string;
     weight: string;
   };
-  transcription?: string; // The full raw text from voice
+  transcription?: string; // nurse vitals capture raw transcript
+  symptoms?: string; // doctor consultation symptoms/HPI transcript
+  initialDiagnosis?: { condition: string; probability: number; reasoning: string }[];
+  finalDiagnosis?: { condition: string; probability: number; reasoning: string }[];
+  finalAnalysis?: string;
   labs?: string[]; // Doctor lab requests
+  labResults: Record<string, string>;
   createdAt: string;
   synced: boolean;
 }

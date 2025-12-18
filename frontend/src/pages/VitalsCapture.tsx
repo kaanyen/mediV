@@ -82,8 +82,13 @@ export default function VitalsCapture() {
       setError(null);
 
       try {
-        const res: VitalsResponse = await processAudio(audioBlob);
+        const res: VitalsResponse | null = await processAudio(audioBlob);
         if (cancelled) return;
+
+        if (!res) {
+          setError("AI Server Disconnected. You can still enter vitals manually.");
+          return;
+        }
 
         setTranscription(res.transcription ?? "");
         setVitals((prev) => ({
@@ -109,7 +114,7 @@ export default function VitalsCapture() {
         }, 2000);
       } catch {
         if (cancelled) return;
-        setError("Processing failed. Ensure the Phase 1 backend is running on port 8000.");
+        setError("Processing failed. You can still enter vitals manually.");
       } finally {
         if (!cancelled) setIsProcessing(false);
       }
@@ -131,6 +136,7 @@ export default function VitalsCapture() {
       status: "waiting_for_consult",
       vitals: { ...vitals },
       transcription,
+      labResults: {},
       createdAt: new Date().toISOString(),
       synced: false
     };

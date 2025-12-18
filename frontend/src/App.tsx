@@ -1,88 +1,27 @@
-import { useEffect, useState } from "react";
-import { BrowserRouter, Link, Route, Routes, useLocation } from "react-router-dom";
+import { BrowserRouter, Route, Routes } from "react-router-dom";
+import AppShell from "./components/layout/AppShell";
 import DoctorHome from "./pages/DoctorHome";
+import LabDashboard from "./pages/LabDashboard";
 import NurseHome from "./pages/NurseHome";
 import PatientDatabase from "./pages/PatientDatabase";
 import Consultation from "./pages/Consultation";
+import PostLabConsult from "./pages/PostLabConsult";
 import VitalsCapture from "./pages/VitalsCapture";
-
-function useOnlineStatus(): boolean {
-  const [online, setOnline] = useState(() => navigator.onLine);
-  useEffect(() => {
-    const on = () => setOnline(true);
-    const off = () => setOnline(false);
-    window.addEventListener("online", on);
-    window.addEventListener("offline", off);
-    return () => {
-      window.removeEventListener("online", on);
-      window.removeEventListener("offline", off);
-    };
-  }, []);
-  return online;
-}
-
-function AppShell() {
-  const online = useOnlineStatus();
-  const location = useLocation();
-  const active = location.pathname.startsWith("/doctor") || location.pathname.startsWith("/consultation") ? "Doctor" : "Nurse";
-  return (
-    <div className="min-h-full bg-slate-50">
-      <div className="border-b border-slate-200 bg-white">
-        <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-4">
-          <div className="flex items-center gap-3">
-            <div className="text-sm font-semibold text-slate-900">MediVoice</div>
-            <div className="rounded-full bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-600">{active} Module</div>
-            <div className="hidden items-center gap-2 sm:flex">
-              <Link
-                to="/"
-                className={[
-                  "rounded-xl px-3 py-1.5 text-xs font-semibold",
-                  active === "Nurse" ? "bg-slate-900 text-white" : "text-slate-700 hover:bg-slate-50"
-                ].join(" ")}
-              >
-                Nurse
-              </Link>
-              <Link
-                to="/doctor"
-                className={[
-                  "rounded-xl px-3 py-1.5 text-xs font-semibold",
-                  active === "Doctor" ? "bg-slate-900 text-white" : "text-slate-700 hover:bg-slate-50"
-                ].join(" ")}
-              >
-                Doctor
-              </Link>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-2 text-sm font-semibold text-slate-700">
-            <span
-              className={[
-                "inline-block h-2.5 w-2.5 rounded-full",
-                online ? "bg-emerald-500" : "bg-slate-400"
-              ].join(" ")}
-              aria-label={online ? "Online" : "Offline"}
-              title={online ? "Online" : "Offline"}
-            />
-            Sync Status: {online ? "Online" : "Offline"}
-          </div>
-        </div>
-      </div>
-
-      <Routes>
-        <Route path="/" element={<NurseHome />} />
-        <Route path="/patients" element={<PatientDatabase />} />
-        <Route path="/vitals/:patientId" element={<VitalsCapture />} />
-        <Route path="/doctor" element={<DoctorHome />} />
-        <Route path="/consultation/:id" element={<Consultation />} />
-      </Routes>
-    </div>
-  );
-}
 
 export default function App() {
   return (
     <BrowserRouter>
-      <AppShell />
+      <AppShell>
+        <Routes>
+          <Route path="/" element={<NurseHome />} />
+          <Route path="/patients" element={<PatientDatabase />} />
+          <Route path="/vitals/:patientId" element={<VitalsCapture />} />
+          <Route path="/doctor" element={<DoctorHome />} />
+          <Route path="/consultation/:id" element={<Consultation />} />
+          <Route path="/post-lab/:id" element={<PostLabConsult />} />
+          <Route path="/lab" element={<LabDashboard />} />
+        </Routes>
+      </AppShell>
     </BrowserRouter>
   );
 }
@@ -145,6 +84,43 @@ Lab Order:
 - Click "Order Labs". Select "Malaria RDT".
 - Submit.
 - Verify: Patient disappears from Doctor Queue (moved to Lab status).
+*/
+
+/*
+Phase 4 Verification Guide
+
+Lab Workflow:
+- Navigate to /lab (add this route to Router temporarily for testing).
+- Select the patient from Phase 3 ("Kwame").
+- Enter "Positive" for Malaria RDT. Submit.
+- Verify patient disappears from Lab Queue.
+
+Doctor Workflow:
+- Return to Doctor Dashboard (/doctor).
+- Verify "Kwame" is back with a "Results Ready" icon.
+- Open chart.
+- Verify AI Logic: Ensure the system calls /confirm-diagnosis and displays confirmation based on the positive test.
+- Click "Accept & Discharge".
+
+Final Check:
+- Go to Nurse Dashboard (/).
+- Verify "Kwame" is now in the "Discharged" column.
+*/
+
+/*
+Phase 5 Verification (PWA + Resilience)
+
+PWA Check:
+- Open Chrome DevTools -> Application -> Manifest. Verify no errors.
+- Check "Service Workers" is registered (Vite PWA plugin).
+
+Offline / AI Down Check:
+- Stop the Python server.
+- Try to record audio.
+- Verify a toast appears: "AI Server Disconnected" and the UI remains usable (manual entry).
+
+Mobile Check:
+- DevTools -> Network -> Throttling (Slow 3G). Verify UI remains responsive and no crashes.
 */
 
 

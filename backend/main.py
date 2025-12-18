@@ -551,6 +551,17 @@ class DiagnosisResponse(BaseModel):
     diagnoses: List[DiagnosisItem]
 
 
+class ConfirmDiagnosisRequest(BaseModel):
+    initial_diagnosis: List[Dict[str, Any]]  # previous AI output
+    symptoms: str
+    lab_results: Dict[str, str]  # {"Malaria RDT": "Positive", "WBC": "12.5"}
+
+
+class ConfirmDiagnosisResponse(BaseModel):
+    final_diagnosis: List[Dict[str, Any]]
+    analysis: str
+
+
 app = FastAPI()
 
 app.add_middleware(
@@ -710,6 +721,74 @@ async def diagnose(req: DiagnosisRequest) -> DiagnosisResponse:
         items.append(DiagnosisItem(condition=condition, probability=prob, reasoning=reasoning))
 
     return DiagnosisResponse(diagnoses=items)
+
+
+@app.post("/confirm-diagnosis", response_model=ConfirmDiagnosisResponse)
+async def confirm_diagnosis(req: ConfirmDiagnosisRequest) -> ConfirmDiagnosisResponse:
+    symptoms = (req.symptoms or "").strip()
+    if not symptoms:
+        raise HTTPException(status_code=400, detail="symptoms is required")
+
+    initial = req.initial_diagnosis or []
+    labs = req.lab_results or {}
+
+    prompt = (
+        "Clinical Update:\n"
+        f"Initial Hypothesis: {json.dumps(initial, ensure_ascii=False)}\n"
+        f"New Lab Results: {json.dumps(labs, ensure_ascii=False)}\n"
+        f"Symptoms: {symptoms}\n"
+        "Task: Re-evaluate the diagnosis. Does the lab result confirm, refute, or suggest a new condition?\n"
+        "Return JSON: {'final_diagnosis': [...], 'analysis': 'Brief explanation'}\n"
+        "Rules:\n"
+        "- final_diagnosis MUST be a JSON list of up to 3 items.\n"
+        "- Each item should include condition, probability (0.0-1.0), reasoning.\n"
+        "- analysis MUST be 1-2 sentences.\n"
+        "Return ONLY the JSON object (no markdown, no extra text)."
+    )
+
+    completion = _medgemma_generate(prompt, max_new_tokens=512, min_new_tokens=48)
+    try:
+        parsed = _robust_json_extract_any(completion)
+    except Exception:
+        print(f"[MediVoice] Warning: could not parse JSON from MedGemma output. output={completion!r}")
+        parsed = {}
+
+    if not isinstance(parsed, dict):
+        parsed = {}
+
+    final_dx = parsed.get("final_diagnosis")
+    analysis = parsed.get("analysis")
+    if not isinstance(final_dx, list):
+        final_dx = []
+    if not isinstance(analysis, str) or not analysis.strip():
+        analysis = "No analysis provided."
+
+    # Light normalization: keep only dict items, coerce probability if present.
+    cleaned: List[Dict[str, Any]] = []
+    for item in final_dx[:3]:
+        if not isinstance(item, dict):
+            continue
+        condition = str(item.get("condition") or "").strip()
+        reasoning = str(item.get("reasoning") or "").strip()
+        prob_raw = item.get("probability")
+        try:
+            prob = float(prob_raw)
+        except Exception:
+            prob = 0.0
+        if prob > 1.0 and prob <= 100.0:
+            prob = prob / 100.0
+        prob = max(0.0, min(1.0, prob))
+        if not condition:
+            continue
+        cleaned.append(
+            {
+                "condition": condition,
+                "probability": prob,
+                "reasoning": reasoning or "No reasoning provided.",
+            }
+        )
+
+    return ConfirmDiagnosisResponse(final_diagnosis=cleaned, analysis=analysis.strip())
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)

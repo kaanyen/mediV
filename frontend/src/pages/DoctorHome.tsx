@@ -1,4 +1,4 @@
-import { Stethoscope } from "lucide-react";
+import { Beaker, Stethoscope } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import type { Encounter, Patient } from "../types/schema";
@@ -33,10 +33,17 @@ export default function DoctorHome() {
   }, []);
 
   const items = useMemo(() => {
-    return encounters.map((e) => {
+    const mapped = encounters.map((e) => {
       const p = patientsById[e.patientId];
       const temp = parseTempC(e.vitals?.temp);
       return { encounter: e, patient: p, temp };
+    });
+    // results_ready should appear at the top
+    return mapped.sort((a, b) => {
+      const pa = a.encounter.status === "results_ready" ? 0 : 1;
+      const pb = b.encounter.status === "results_ready" ? 0 : 1;
+      if (pa !== pb) return pa - pb;
+      return Date.parse(b.encounter.createdAt) - Date.parse(a.encounter.createdAt);
     });
   }, [encounters, patientsById]);
 
@@ -59,7 +66,9 @@ export default function DoctorHome() {
           items.map(({ encounter, patient, temp }) => (
             <button
               key={encounter._id}
-              onClick={() => navigate(`/consultation/${encounter._id}`)}
+              onClick={() =>
+                navigate(encounter.status === "results_ready" ? `/post-lab/${encounter._id}` : `/consultation/${encounter._id}`)
+              }
               className="flex w-full items-center justify-between gap-4 rounded-2xl border border-slate-200 bg-white px-5 py-4 text-left shadow-sm hover:bg-slate-50"
             >
               <div className="min-w-0">
@@ -69,6 +78,12 @@ export default function DoctorHome() {
                 <div className="mt-1 text-sm text-slate-600">
                   {patient ? `${patient.age} • ${patient.sex}` : "Patient details missing"}
                 </div>
+                {encounter.status === "results_ready" && (
+                  <div className="mt-2 inline-flex items-center gap-2 rounded-full bg-emerald-50 px-2 py-1 text-xs font-semibold text-emerald-700">
+                    <Beaker className="h-3.5 w-3.5" />
+                    Results Ready
+                  </div>
+                )}
               </div>
 
               <div className="flex items-center gap-4">
@@ -83,7 +98,7 @@ export default function DoctorHome() {
                   <div className="text-sm font-semibold text-slate-900">{encounter.vitals?.bp || "—"}</div>
                 </div>
                 <div className="rounded-xl bg-slate-900 p-2 text-white">
-                  <Stethoscope className="h-4 w-4" />
+                  {encounter.status === "results_ready" ? <Beaker className="h-4 w-4" /> : <Stethoscope className="h-4 w-4" />}
                 </div>
               </div>
             </button>

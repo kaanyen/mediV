@@ -51,6 +51,19 @@ export async function createEncounter(encounter: Encounter): Promise<Encounter> 
   return encounter;
 }
 
+async function updateEncounter(encounterId: string, patch: Partial<Encounter>): Promise<Encounter> {
+  await ensureIndexes();
+  const current = (await db.get(encounterId)) as any;
+  if (!current || current.type !== "encounter") {
+    throw new Error("Encounter not found");
+  }
+  const updated: any = { ...current, ...patch, synced: false };
+  await db.put(updated);
+  const { type: _t, _rev: _r, ...enc } = updated as EncounterDoc & { _rev?: string };
+  await BackendAdapter.syncEncounter(enc as Encounter);
+  return enc as Encounter;
+}
+
 export async function getEncounterById(encounterId: string): Promise<Encounter | null> {
   try {
     const doc = (await db.get(encounterId)) as any;
@@ -73,27 +86,40 @@ export async function getEncountersByStatus(status: EncounterStatus): Promise<En
 }
 
 export async function getDoctorQueue(): Promise<Encounter[]> {
-  return getEncountersByStatus("waiting_for_consult");
+  // Phase 4: include results_ready, prioritized to the top.
+  const [ready, waiting] = await Promise.all([
+    getEncountersByStatus("results_ready"),
+    getEncountersByStatus("waiting_for_consult")
+  ]);
+  return [...ready, ...waiting];
 }
 
 export async function updateEncounterToLab(encounterId: string, labRequest: string[]): Promise<Encounter> {
-  await ensureIndexes();
-  const current = (await db.get(encounterId)) as any;
-  if (!current || current.type !== "encounter") {
-    throw new Error("Encounter not found");
-  }
+  return updateEncounter(encounterId, { status: "waiting_for_lab", labs: labRequest });
+}
 
-  const updated: any = {
-    ...current,
-    status: "waiting_for_lab",
-    labs: labRequest,
-    synced: false
-  };
-  await db.put(updated);
+export async function getLabQueue(): Promise<Encounter[]> {
+  return getEncountersByStatus("waiting_for_lab");
+}
 
-  const { type: _t, _rev: _r, ...enc } = updated as EncounterDoc & { _rev?: string };
-  await BackendAdapter.syncEncounter(enc as Encounter);
-  return enc as Encounter;
+export async function submitLabResults(encounterId: string, results: Record<string, string>): Promise<Encounter> {
+  return updateEncounter(encounterId, { status: "results_ready", labResults: results });
+}
+
+export async function saveInitialDiagnosis(
+  encounterId: string,
+  symptoms: string,
+  initialDiagnosis: Encounter["initialDiagnosis"]
+): Promise<Encounter> {
+  return updateEncounter(encounterId, { symptoms, initialDiagnosis });
+}
+
+export async function dischargeEncounter(
+  encounterId: string,
+  finalDiagnosis: Encounter["finalDiagnosis"],
+  finalAnalysis: string
+): Promise<Encounter> {
+  return updateEncounter(encounterId, { status: "discharged", finalDiagnosis, finalAnalysis });
 }
 
 export async function getAllPatients(): Promise<Patient[]> {

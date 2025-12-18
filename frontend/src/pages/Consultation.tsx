@@ -6,7 +6,7 @@ import LabRequestModal from "../components/LabRequestModal";
 import VoiceVisualizer from "../components/VoiceVisualizer";
 import { useAudioRecorder } from "../hooks/useAudioRecorder";
 import { getDiagnosis, processAudio } from "../services/api";
-import { getEncounterById, getPatientById, updateEncounterToLab } from "../services/db";
+import { getEncounterById, getPatientById, saveInitialDiagnosis, updateEncounterToLab } from "../services/db";
 import type { Encounter, Patient } from "../types/schema";
 
 function vitalsLabel(v: Encounter["vitals"] | undefined) {
@@ -36,6 +36,7 @@ export default function Consultation() {
   const [diagnoses, setDiagnoses] = useState<Diagnosis[] | null>(null);
   const [isDiagnosing, setIsDiagnosing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [manualDiagnosis, setManualDiagnosis] = useState("");
 
   const [labModalOpen, setLabModalOpen] = useState(false);
 
@@ -88,6 +89,10 @@ export default function Consultation() {
       try {
         const res = await processAudio(audioBlob);
         if (cancelled) return;
+        if (!res) {
+          setError("AI Server Disconnected. You can type symptoms manually.");
+          return;
+        }
         const next = res.transcription ?? "";
         setSymptoms(next);
         setFlashSymptoms(true);
@@ -95,7 +100,7 @@ export default function Consultation() {
         clearFlashTimeout.current = window.setTimeout(() => setFlashSymptoms(false), 1200);
       } catch {
         if (cancelled) return;
-        setError("Transcription failed. Ensure backend is running on port 8000.");
+        setError("Transcription failed. You can type symptoms manually.");
       } finally {
         if (!cancelled) setIsTranscribing(false);
       }
@@ -116,9 +121,19 @@ export default function Consultation() {
         symptoms,
         vitals: encounter.vitals ?? {}
       });
-      setDiagnoses(res.diagnoses ?? []);
+      if (!res) {
+        setError("AI Server Disconnected. Use Manual Diagnosis below.");
+        setDiagnoses(null);
+        return;
+      }
+      const dx = (res.diagnoses ?? []) as Diagnosis[];
+      setDiagnoses(dx);
+      // Persist for Phase 4 "second opinion" workflow.
+      if (id) {
+        await saveInitialDiagnosis(id, symptoms, dx);
+      }
     } catch {
-      setError("Diagnosis failed. Ensure backend is running and /diagnose is available.");
+      setError("Diagnosis failed. Use Manual Diagnosis below.");
     } finally {
       setIsDiagnosing(false);
     }
@@ -222,15 +237,36 @@ export default function Consultation() {
             Generate Differential Diagnosis
           </button>
 
-          {diagnoses && <DiagnosisCard diagnoses={diagnoses} />}
+          {diagnoses ? <DiagnosisCard diagnoses={diagnoses} /> : null}
+
+          {error && (
+            <div className="rounded-2xl border border-slate-200 bg-white p-4">
+              <div className="text-sm font-semibold text-slate-800">Manual Diagnosis</div>
+              <div className="mt-1 text-sm text-slate-600">
+                AI is unavailable. Enter your working diagnosis manually (for the demo).
+              </div>
+              <textarea
+                value={manualDiagnosis}
+                onChange={(e) => setManualDiagnosis(e.target.value)}
+                className="mt-3 h-28 w-full resize-none rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900 outline-none"
+                placeholder='e.g. "Suspected malaria; treat and await RDT"'
+              />
+            </div>
+          )}
 
           <button
             onClick={() => setLabModalOpen(true)}
+            disabled={!diagnoses || diagnoses.length === 0}
             className="inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white shadow-sm hover:bg-slate-800"
           >
             <TestTubeDiagonal className="h-4 w-4" />
             Order Labs & Proceed
           </button>
+          {!diagnoses || diagnoses.length === 0 ? (
+            <div className="text-xs text-slate-600">
+              Generate and save the initial differential diagnosis before ordering labs.
+            </div>
+          ) : null}
         </div>
       </div>
 
