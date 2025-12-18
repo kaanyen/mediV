@@ -4,7 +4,7 @@ python-multipart
 torch
 transformers>=4.50.0
 accelerate
-peft>=0.18.0
+peft>=0.17.1
 librosa
 soundfile
 numpy

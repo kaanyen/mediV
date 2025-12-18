@@ -5,7 +5,7 @@ import shutil
 import subprocess
 import uuid
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Union
 
 os.environ.setdefault("BITSANDBYTES_NOWELCOME", "1")
 if not (os.getenv("CUDA_VISIBLE_DEVICES") or "").strip():
@@ -119,6 +119,69 @@ def _robust_json_extract(text: str) -> Dict[str, Any]:
         return json.loads(candidate2)
 
 
+def _robust_json_extract_any(text: str) -> Union[Dict[str, Any], List[Any]]:
+    """
+    Extract the first JSON value (object or array) from model output.
+    Handles fenced blocks (```json ... ```), and raw inline JSON.
+    """
+    if not text or not text.strip():
+        raise ValueError("Empty LLM output")
+
+    # Prefer fenced JSON blocks containing either an object or array
+    fence = re.search(r"```(?:json)?\s*([\[{][\s\S]*?[\]}])\s*```", text, flags=re.IGNORECASE)
+    candidate = fence.group(1) if fence else None
+
+    if candidate is None:
+        # Find whichever appears first: '{' or '['
+        brace = text.find("{")
+        bracket = text.find("[")
+        if brace == -1 and bracket == -1:
+            raise ValueError("No JSON value found in LLM output")
+        if brace == -1:
+            start = bracket
+            end = text.rfind("]")
+        elif bracket == -1:
+            start = brace
+            end = text.rfind("}")
+        else:
+            start = min(brace, bracket)
+            end = text.rfind("]") if start == bracket else text.rfind("}")
+        if start == -1 or end == -1 or end <= start:
+            raise ValueError("No JSON value found in LLM output")
+        candidate = text[start : end + 1]
+
+    candidate = candidate.strip()
+    candidate = candidate.replace("\u201c", '"').replace("\u201d", '"').replace("\u2018", "'").replace(
+        "\u2019", "'"
+    )
+
+    try:
+        return json.loads(candidate)
+    except json.JSONDecodeError:
+        candidate2 = re.sub(r",\s*([}\]])", r"\1", candidate)
+        try:
+            return json.loads(candidate2)
+        except json.JSONDecodeError:
+            # Salvage common truncation: array where last element is cut off.
+            c = candidate2.strip()
+            if c.startswith("["):
+                last_obj_end = c.rfind("}")
+                if last_obj_end != -1:
+                    candidate3 = c[: last_obj_end + 1].rstrip()
+                    # Close the array
+                    if not candidate3.endswith("]"):
+                        candidate3 = candidate3 + "]"
+                    candidate3 = re.sub(r",\s*]", "]", candidate3)
+                    return json.loads(candidate3)
+            # Salvage common truncation: object where tail is cut off (best-effort)
+            if c.startswith("{"):
+                last_brace = c.rfind("}")
+                if last_brace != -1:
+                    candidate3 = c[: last_brace + 1]
+                    return json.loads(candidate3)
+            raise
+
+
 def _get_pad_token_id_from_processor(processor: Any) -> Optional[int]:
     tok = getattr(processor, "tokenizer", None)
     if tok is None:
@@ -151,7 +214,7 @@ def _get_eos_token_id_for_generation() -> Optional[Any]:
     return _get_eos_token_id_from_processor(LLM_PROCESSOR)
 
 
-def _medgemma_generate(prompt: str) -> str:
+def _medgemma_generate(prompt: str, *, max_new_tokens: int = 256, min_new_tokens: int = 24) -> str:
     """
     Generate text from MedGemma. Uses chat template when available and includes a computed attention_mask
     to avoid warnings/odd behavior when pad_token == eos_token.
@@ -179,8 +242,8 @@ def _medgemma_generate(prompt: str) -> str:
         eos_id = _get_eos_token_id_for_generation()
 
         gen_kwargs: Dict[str, Any] = {
-            "max_new_tokens": 256,
-            "min_new_tokens": 24,
+            "max_new_tokens": int(max_new_tokens),
+            "min_new_tokens": int(min_new_tokens),
             "do_sample": False,
         }
         if pad_id is not None:
@@ -214,8 +277,8 @@ def _medgemma_generate(prompt: str) -> str:
     with torch.inference_mode():
         output_ids = LLM_MODEL.generate(
             **inputs,
-            max_new_tokens=256,
-            min_new_tokens=16,
+            max_new_tokens=int(max_new_tokens),
+            min_new_tokens=max(1, int(min_new_tokens) - 8),
             do_sample=False,
             temperature=0.0,
             pad_token_id=tok.pad_token_id,
@@ -472,11 +535,44 @@ class VitalsResponse(BaseModel):
     vitals: VitalsModel = Field(..., description="Extracted vital signs")
 
 
+class DiagnosisRequest(BaseModel):
+    symptoms: str
+    vitals: Dict[str, Any]  # {bp, temp, pulse...}
+    history: Optional[str] = None
+
+
+class DiagnosisItem(BaseModel):
+    condition: str
+    probability: float
+    reasoning: str
+
+
+class DiagnosisResponse(BaseModel):
+    diagnoses: List[DiagnosisItem]
+
+
+class ConfirmDiagnosisRequest(BaseModel):
+    initial_diagnosis: List[Dict[str, Any]]  # previous AI output
+    symptoms: str
+    lab_results: Dict[str, str]  # {"Malaria RDT": "Positive", "WBC": "12.5"}
+
+
+class ConfirmDiagnosisResponse(BaseModel):
+    final_diagnosis: List[Dict[str, Any]]
+    analysis: str
+
+
 app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    # Allow both dev (5173) and production preview (4173) origins locally.
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:4173",
+        "http://127.0.0.1:4173",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -569,6 +665,136 @@ async def process_audio(file: UploadFile = File(...)) -> VitalsResponse:
         except Exception as cleanup_err:
             print(f"[MediVoice] Warning: temp cleanup failed for {tmp_path}: {cleanup_err}")
 
+
+@app.post("/diagnose", response_model=DiagnosisResponse)
+async def diagnose(req: DiagnosisRequest) -> DiagnosisResponse:
+    symptoms = (req.symptoms or "").strip()
+    if not symptoms:
+        raise HTTPException(status_code=400, detail="symptoms is required")
+
+    vitals = req.vitals or {}
+    bp = str(vitals.get("bp") or "").strip()
+    temp = str(vitals.get("temp") or "").strip()
+    pulse = str(vitals.get("pulse") or "").strip()
+    spo2 = str(vitals.get("spo2") or "").strip()
+
+    history = (req.history or "").strip()
+
+    prompt = (
+        f"Patient presents with symptoms: {symptoms}\n"
+        f"Vitals: BP {bp}, Temp {temp}, Pulse {pulse}, SpO2 {spo2}.\n"
+        + (f"History: {history}\n" if history else "")
+        + "Task: Provide a differential diagnosis of the top 3 most likely conditions based on standard tropical "
+        "medicine guidelines (Ghana).\n"
+        "Rules:\n"
+        "- Return EXACTLY 3 items.\n"
+        "- probability MUST be a number from 0.0 to 1.0.\n"
+        "- reasoning MUST be ONE sentence, max 20 words.\n"
+        "Return ONLY a raw JSON list: "
+        "[{'condition': 'Name', 'probability': 0.0, 'reasoning': '...'}]"
+    )
+
+    # Diagnosis responses can be longer than vitals extraction; allow a bigger budget.
+    completion = _medgemma_generate(prompt, max_new_tokens=512, min_new_tokens=48)
+    try:
+        parsed = _robust_json_extract_any(completion)
+    except Exception:
+        print(f"[MediVoice] Warning: could not parse JSON list from MedGemma output. output={completion!r}")
+        parsed = []
+
+    if not isinstance(parsed, list):
+        parsed = []
+
+    items: List[DiagnosisItem] = []
+    for raw in parsed[:3]:
+        if not isinstance(raw, dict):
+            continue
+        condition = str(raw.get("condition") or "").strip()
+        reasoning = str(raw.get("reasoning") or "").strip()
+        prob_raw = raw.get("probability")
+        try:
+            prob = float(prob_raw)
+        except Exception:
+            prob = 0.0
+        # Accept percent-style outputs like 85 or "85%".
+        if prob > 1.0 and prob <= 100.0:
+            prob = prob / 100.0
+        prob = max(0.0, min(1.0, prob))
+        if not condition:
+            continue
+        if not reasoning:
+            reasoning = "No reasoning provided."
+        items.append(DiagnosisItem(condition=condition, probability=prob, reasoning=reasoning))
+
+    return DiagnosisResponse(diagnoses=items)
+
+
+@app.post("/confirm-diagnosis", response_model=ConfirmDiagnosisResponse)
+async def confirm_diagnosis(req: ConfirmDiagnosisRequest) -> ConfirmDiagnosisResponse:
+    symptoms = (req.symptoms or "").strip()
+    if not symptoms:
+        raise HTTPException(status_code=400, detail="symptoms is required")
+
+    initial = req.initial_diagnosis or []
+    labs = req.lab_results or {}
+
+    prompt = (
+        "Clinical Update:\n"
+        f"Initial Hypothesis: {json.dumps(initial, ensure_ascii=False)}\n"
+        f"New Lab Results: {json.dumps(labs, ensure_ascii=False)}\n"
+        f"Symptoms: {symptoms}\n"
+        "Task: Re-evaluate the diagnosis. Does the lab result confirm, refute, or suggest a new condition?\n"
+        "Return JSON: {'final_diagnosis': [...], 'analysis': 'Brief explanation'}\n"
+        "Rules:\n"
+        "- final_diagnosis MUST be a JSON list of up to 3 items.\n"
+        "- Each item should include condition, probability (0.0-1.0), reasoning.\n"
+        "- analysis MUST be 1-2 sentences.\n"
+        "Return ONLY the JSON object (no markdown, no extra text)."
+    )
+
+    completion = _medgemma_generate(prompt, max_new_tokens=512, min_new_tokens=48)
+    try:
+        parsed = _robust_json_extract_any(completion)
+    except Exception:
+        print(f"[MediVoice] Warning: could not parse JSON from MedGemma output. output={completion!r}")
+        parsed = {}
+
+    if not isinstance(parsed, dict):
+        parsed = {}
+
+    final_dx = parsed.get("final_diagnosis")
+    analysis = parsed.get("analysis")
+    if not isinstance(final_dx, list):
+        final_dx = []
+    if not isinstance(analysis, str) or not analysis.strip():
+        analysis = "No analysis provided."
+
+    # Light normalization: keep only dict items, coerce probability if present.
+    cleaned: List[Dict[str, Any]] = []
+    for item in final_dx[:3]:
+        if not isinstance(item, dict):
+            continue
+        condition = str(item.get("condition") or "").strip()
+        reasoning = str(item.get("reasoning") or "").strip()
+        prob_raw = item.get("probability")
+        try:
+            prob = float(prob_raw)
+        except Exception:
+            prob = 0.0
+        if prob > 1.0 and prob <= 100.0:
+            prob = prob / 100.0
+        prob = max(0.0, min(1.0, prob))
+        if not condition:
+            continue
+        cleaned.append(
+            {
+                "condition": condition,
+                "probability": prob,
+                "reasoning": reasoning or "No reasoning provided.",
+            }
+        )
+
+    return ConfirmDiagnosisResponse(final_diagnosis=cleaned, analysis=analysis.strip())
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
