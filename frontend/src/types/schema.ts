@@ -24,6 +24,7 @@ export interface Encounter {
     weight: string;
   };
   transcription?: string; // The full raw text from voice
+  labs?: string[]; // Doctor lab requests
   createdAt: string;
   synced: boolean;
 }

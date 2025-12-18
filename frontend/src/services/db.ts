@@ -51,6 +51,18 @@ export async function createEncounter(encounter: Encounter): Promise<Encounter> 
   return encounter;
 }
 
+export async function getEncounterById(encounterId: string): Promise<Encounter | null> {
+  try {
+    const doc = (await db.get(encounterId)) as any;
+    if (!doc || doc.type !== "encounter") return null;
+    const { type: _t, _rev: _r, ...enc } = doc as EncounterDoc & { _rev?: string };
+    return enc;
+  } catch (e: any) {
+    if (e?.status === 404) return null;
+    throw e;
+  }
+}
+
 export async function getEncountersByStatus(status: EncounterStatus): Promise<Encounter[]> {
   await ensureIndexes();
   const res = await (db as any).find({
@@ -58,6 +70,30 @@ export async function getEncountersByStatus(status: EncounterStatus): Promise<En
     sort: [{ type: "asc" }, { status: "asc" }, { createdAt: "desc" }]
   });
   return (res.docs as EncounterDoc[]).map(({ type: _t, ...enc }) => enc);
+}
+
+export async function getDoctorQueue(): Promise<Encounter[]> {
+  return getEncountersByStatus("waiting_for_consult");
+}
+
+export async function updateEncounterToLab(encounterId: string, labRequest: string[]): Promise<Encounter> {
+  await ensureIndexes();
+  const current = (await db.get(encounterId)) as any;
+  if (!current || current.type !== "encounter") {
+    throw new Error("Encounter not found");
+  }
+
+  const updated: any = {
+    ...current,
+    status: "waiting_for_lab",
+    labs: labRequest,
+    synced: false
+  };
+  await db.put(updated);
+
+  const { type: _t, _rev: _r, ...enc } = updated as EncounterDoc & { _rev?: string };
+  await BackendAdapter.syncEncounter(enc as Encounter);
+  return enc as Encounter;
 }
 
 export async function getAllPatients(): Promise<Patient[]> {

@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
-import { BrowserRouter, Route, Routes } from "react-router-dom";
+import { BrowserRouter, Link, Route, Routes, useLocation } from "react-router-dom";
+import DoctorHome from "./pages/DoctorHome";
 import NurseHome from "./pages/NurseHome";
 import PatientDatabase from "./pages/PatientDatabase";
+import Consultation from "./pages/Consultation";
 import VitalsCapture from "./pages/VitalsCapture";
 
 function useOnlineStatus(): boolean {
@@ -21,14 +23,34 @@ function useOnlineStatus(): boolean {
 
 function AppShell() {
   const online = useOnlineStatus();
+  const location = useLocation();
+  const active = location.pathname.startsWith("/doctor") || location.pathname.startsWith("/consultation") ? "Doctor" : "Nurse";
   return (
     <div className="min-h-full bg-slate-50">
       <div className="border-b border-slate-200 bg-white">
         <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-4">
           <div className="flex items-center gap-3">
             <div className="text-sm font-semibold text-slate-900">MediVoice</div>
-            <div className="rounded-full bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-600">
-              Nurse Workflow
+            <div className="rounded-full bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-600">{active} Module</div>
+            <div className="hidden items-center gap-2 sm:flex">
+              <Link
+                to="/"
+                className={[
+                  "rounded-xl px-3 py-1.5 text-xs font-semibold",
+                  active === "Nurse" ? "bg-slate-900 text-white" : "text-slate-700 hover:bg-slate-50"
+                ].join(" ")}
+              >
+                Nurse
+              </Link>
+              <Link
+                to="/doctor"
+                className={[
+                  "rounded-xl px-3 py-1.5 text-xs font-semibold",
+                  active === "Doctor" ? "bg-slate-900 text-white" : "text-slate-700 hover:bg-slate-50"
+                ].join(" ")}
+              >
+                Doctor
+              </Link>
             </div>
           </div>
 
@@ -50,6 +72,8 @@ function AppShell() {
         <Route path="/" element={<NurseHome />} />
         <Route path="/patients" element={<PatientDatabase />} />
         <Route path="/vitals/:patientId" element={<VitalsCapture />} />
+        <Route path="/doctor" element={<DoctorHome />} />
+        <Route path="/consultation/:id" element={<Consultation />} />
       </Routes>
     </div>
   );
@@ -103,6 +127,24 @@ Test Queue:
 
 Test Existing:
 - Click FAB -> Select Existing -> Search "Kwame" -> Click row -> Verify new Vitals screen opens.
+*/
+
+/*
+Phase 3 Verification Guide
+
+Queue Check:
+- Ensure the patient processed in Phase 2 ("Kwame") appears in the Doctor's Queue (/doctor).
+
+AI Diagnosis:
+- Open Consultation.
+- Record Symptoms: "Patient has severe headache, chills, and bitter taste in mouth."
+- Click "Generate Diagnosis".
+- Verify: Backend logs the prompt. Frontend displays "Malaria" with high probability.
+
+Lab Order:
+- Click "Order Labs". Select "Malaria RDT".
+- Submit.
+- Verify: Patient disappears from Doctor Queue (moved to Lab status).
 */
 
 

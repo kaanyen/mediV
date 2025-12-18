@@ -13,7 +13,7 @@ const columns: Column[] = [
   { title: "Waiting for Consult", status: "waiting_for_consult" },
   { title: "In Consult", status: "in_consult" },
   { title: "Waiting for Lab", status: "waiting_for_lab" },
-  { title: "Discharged/Exited", status: "discharged" }
+  { title: "Discharged", status: "discharged" }
 ];
 
 function minutesBetween(iso: string, now = Date.now()): number {
