@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="96" fill="#ffffff"/>
+  <rect x="48" y="48" width="416" height="416" rx="88" fill="#3b82f6"/>
+  <g fill="#ffffff">
+    <rect x="228" y="120" width="56" height="272" rx="24"/>
+    <rect x="120" y="228" width="272" height="56" rx="24"/>
+  </g>
+  <text x="256" y="474" text-anchor="middle" font-family="system-ui, -apple-system, Segoe UI, Roboto" font-size="42" fill="#1e3a8a">MediVoice</text>
+</svg>
+
+
