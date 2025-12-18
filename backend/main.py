@@ -1,0 +1,576 @@
+import json
+import os
+import re
+import shutil
+import subprocess
+import uuid
+from pathlib import Path
+from typing import Any, Dict, Optional
+
+os.environ.setdefault("BITSANDBYTES_NOWELCOME", "1")
+if not (os.getenv("CUDA_VISIBLE_DEVICES") or "").strip():
+    # Avoid bitsandbytes probing on non-CUDA platforms (e.g., Apple MPS) which can emit noisy errors.
+    os.environ.setdefault("TRANSFORMERS_NO_BITSANDBYTES", "1")
+
+import numpy as np
+import torch
+import uvicorn
+from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field
+from peft import PeftConfig, PeftModel
+from transformers import (
+    AutoModelForCausalLM,
+    AutoModelForImageTextToText,
+    AutoModelForSpeechSeq2Seq,
+    AutoProcessor,
+    AutoTokenizer,
+)
+
+BACKEND_DIR = Path(__file__).resolve().parent
+TEMP_DIR = BACKEND_DIR / "temp"
+ADAPTER_DIR = BACKEND_DIR / "models" / "whisper-adapter"
+DEFAULT_WHISPER_LOCAL_DIR = BACKEND_DIR / "models" / "distil-large-v3"
+DEFAULT_MEDGEMMA_LOCAL_DIR = BACKEND_DIR / "models" / "medgemma-4b-it"
+
+HF_TOKEN = (
+    os.getenv("HF_TOKEN")
+    or os.getenv("HUGGINGFACE_HUB_TOKEN")
+    or os.getenv("HF_ACCESS_TOKEN")
+    or os.getenv("HUGGINGFACE_TOKEN")
+)
+
+
+def _hf_token_kwargs() -> Dict[str, Any]:
+    return {"token": HF_TOKEN} if HF_TOKEN else {}
+
+
+def _from_pretrained_with_token(loader_fn, *args, **kwargs):
+    """
+    Transformers versions vary: some accept `token=...`, older accept `use_auth_token=...`.
+    This wrapper tries `token` first, then falls back to `use_auth_token`.
+    """
+    if not HF_TOKEN:
+        return loader_fn(*args, **kwargs)
+    try:
+        return loader_fn(*args, **kwargs, token=HF_TOKEN)
+    except TypeError:
+        return loader_fn(*args, **kwargs, use_auth_token=HF_TOKEN)
+
+
+def _select_device() -> torch.device:
+    # Preference order: CUDA > MPS > CPU
+    if torch.cuda.is_available():
+        dev = torch.device("cuda")
+    elif getattr(torch.backends, "mps", None) is not None and torch.backends.mps.is_available():
+        dev = torch.device("mps")
+    else:
+        dev = torch.device("cpu")
+    print(f"[MediVoice] Selected device: {dev.type}")
+    return dev
+
+
+DEVICE: torch.device = _select_device()
+
+
+def _llm_dtype_for_device(device: torch.device) -> torch.dtype:
+    # float16 is not supported for many CPU ops; keep CPU stable with float32
+    if device.type == "cpu":
+        print("[MediVoice] CPU detected; using float32 for MedGemma for compatibility.")
+        return torch.float32
+    # MedGemma (Gemma 3) checkpoints are typically BF16; MPS supports BF16 and it avoids
+    # degenerate generations we can see with FP16 on Apple Silicon.
+    if device.type == "mps":
+        return torch.bfloat16
+    return torch.float16
+
+
+def _robust_json_extract(text: str) -> Dict[str, Any]:
+    """
+    Extracts the first JSON object from LLM output.
+    Handles fenced blocks (```json ... ```), and raw inline JSON.
+    """
+    if not text or not text.strip():
+        raise ValueError("Empty LLM output")
+
+    # Prefer fenced JSON blocks
+    fence = re.search(r"```(?:json)?\s*(\{[\s\S]*?\})\s*```", text, flags=re.IGNORECASE)
+    candidate = fence.group(1) if fence else None
+
+    # Fallback: substring from first { to last }
+    if candidate is None:
+        start = text.find("{")
+        end = text.rfind("}")
+        if start == -1 or end == -1 or end <= start:
+            raise ValueError("No JSON object found in LLM output")
+        candidate = text[start : end + 1]
+
+    # Sanitize common issues
+    candidate = candidate.strip()
+    candidate = candidate.replace("\u201c", '"').replace("\u201d", '"').replace("\u2018", "'").replace(
+        "\u2019", "'"
+    )
+
+    try:
+        return json.loads(candidate)
+    except json.JSONDecodeError:
+        # Minimal last-chance cleanup: remove trailing commas and try again
+        candidate2 = re.sub(r",\s*([}\]])", r"\1", candidate)
+        return json.loads(candidate2)
+
+
+def _get_pad_token_id_from_processor(processor: Any) -> Optional[int]:
+    tok = getattr(processor, "tokenizer", None)
+    if tok is None:
+        return None
+    # Prefer a real pad token if available (Gemma has <pad>=0). Only fall back to eos if missing.
+    if tok.pad_token_id is None and tok.eos_token_id is not None:
+        tok.pad_token = tok.eos_token
+    return tok.pad_token_id
+
+
+def _get_eos_token_id_from_processor(processor: Any) -> Optional[int]:
+    tok = getattr(processor, "tokenizer", None)
+    if tok is None:
+        return None
+    return tok.eos_token_id
+
+
+def _get_eos_token_id_for_generation() -> Optional[Any]:
+    """
+    Gemma3 configs commonly define multiple eos tokens (e.g. [1, 106]).
+    Return eos_token_id in a form suitable for `generate` (int or list[int]).
+    """
+    # Prefer generation_config if present (often contains the correct multi-eos list)
+    eos = getattr(getattr(LLM_MODEL, "generation_config", None), "eos_token_id", None)
+    if eos is not None:
+        return eos
+    eos = getattr(getattr(LLM_MODEL, "config", None), "eos_token_id", None)
+    if eos is not None:
+        return eos
+    return _get_eos_token_id_from_processor(LLM_PROCESSOR)
+
+
+def _medgemma_generate(prompt: str) -> str:
+    """
+    Generate text from MedGemma. Uses chat template when available and includes a computed attention_mask
+    to avoid warnings/odd behavior when pad_token == eos_token.
+    """
+    messages = [{"role": "user", "content": [{"type": "text", "text": prompt}]}]
+
+    if hasattr(LLM_PROCESSOR, "apply_chat_template"):
+        inputs = LLM_PROCESSOR.apply_chat_template(
+            messages,
+            add_generation_prompt=True,
+            tokenize=True,
+            return_dict=True,
+            return_tensors="pt",
+        )
+        inputs = inputs.to(LLM_MODEL.device)
+
+        # Ensure attention_mask exists and is correct
+        if "attention_mask" not in inputs or inputs["attention_mask"] is None:
+            pad_id = _get_pad_token_id_from_processor(LLM_PROCESSOR)
+            if pad_id is not None and "input_ids" in inputs:
+                inputs["attention_mask"] = (inputs["input_ids"] != pad_id).long()
+
+        input_len = int(inputs["input_ids"].shape[-1])
+        pad_id = _get_pad_token_id_from_processor(LLM_PROCESSOR)
+        eos_id = _get_eos_token_id_for_generation()
+
+        gen_kwargs: Dict[str, Any] = {
+            "max_new_tokens": 256,
+            "min_new_tokens": 24,
+            "do_sample": False,
+        }
+        if pad_id is not None:
+            gen_kwargs["pad_token_id"] = pad_id
+        if eos_id is not None:
+            gen_kwargs["eos_token_id"] = eos_id
+
+        with torch.inference_mode():
+            generation = LLM_MODEL.generate(**inputs, **gen_kwargs)
+
+        # Prefer decoding only newly generated tokens; if empty, fall back to full decode
+        new_tokens = generation[0][input_len:]
+        completion = LLM_PROCESSOR.decode(new_tokens, skip_special_tokens=True).strip()
+        if completion:
+            return completion
+        # Helpful debug signal in server logs
+        try:
+            print(f"[MediVoice] MedGemma produced {int(new_tokens.shape[-1])} new tokens but decoded to empty.")
+        except Exception:
+            print("[MediVoice] MedGemma decoded to empty completion.")
+        full_text = LLM_PROCESSOR.decode(generation[0], skip_special_tokens=True).strip()
+        return full_text
+
+    # Fallback: treat as a normal causal LM tokenizer
+    tok = _from_pretrained_with_token(AutoTokenizer.from_pretrained, llm_source, use_fast=True)
+    if tok.pad_token_id is None and tok.eos_token_id is not None:
+        tok.pad_token = tok.eos_token
+    inputs = tok(prompt, return_tensors="pt").to(LLM_MODEL.device)
+    if "attention_mask" not in inputs and tok.pad_token_id is not None:
+        inputs["attention_mask"] = (inputs["input_ids"] != tok.pad_token_id).long()
+    with torch.inference_mode():
+        output_ids = LLM_MODEL.generate(
+            **inputs,
+            max_new_tokens=256,
+            min_new_tokens=16,
+            do_sample=False,
+            temperature=0.0,
+            pad_token_id=tok.pad_token_id,
+            eos_token_id=tok.eos_token_id,
+        )
+    decoded = tok.decode(output_ids[0], skip_special_tokens=True).strip()
+    return decoded
+
+
+def _normalize_vitals(obj: Dict[str, Any]) -> Dict[str, Optional[str]]:
+    # Ensure required keys exist; coerce values to strings if present.
+    out: Dict[str, Optional[str]] = {"bp": None, "temp": None, "pulse": None, "spo2": None}
+    if not isinstance(obj, dict):
+        return out
+
+    def pick(*keys: str) -> Optional[Any]:
+        for k in keys:
+            if k in obj and obj[k] not in (None, ""):
+                return obj[k]
+        return None
+
+    out["bp"] = pick("bp", "blood_pressure", "bloodPressure")
+    out["temp"] = pick("temp", "temperature")
+    out["pulse"] = pick("pulse", "hr", "heart_rate", "heartRate")
+    out["spo2"] = pick("spo2", "SpO2", "o2sat", "oxygen_saturation", "oxygenSaturation")
+
+    for k, v in list(out.items()):
+        if v is None:
+            continue
+        if isinstance(v, (int, float)):
+            out[k] = str(v)
+        elif isinstance(v, str):
+            out[k] = v.strip()
+        else:
+            out[k] = json.dumps(v, ensure_ascii=False)
+    return out
+
+
+def _load_audio_mono_16k(path: Path) -> np.ndarray:
+    """
+    Load audio into a mono float32 waveform at 16kHz.
+    For webm/opus uploads (Chrome MediaRecorder), we convert with ffmpeg first.
+    """
+    tmp_converted: Optional[Path] = None
+    try:
+        if path.suffix.lower() == ".webm":
+            if shutil.which("ffmpeg") is None:
+                raise RuntimeError(
+                    "ffmpeg is required to decode .webm audio. Install it (e.g. `brew install ffmpeg`) "
+                    "or upload audio/wav."
+                )
+            tmp_converted = path.parent / f"{path.stem}-decoded-{uuid.uuid4().hex}.wav"
+            cmd = [
+                "ffmpeg",
+                "-y",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-i",
+                str(path),
+                "-ac",
+                "1",
+                "-ar",
+                "16000",
+                "-f",
+                "wav",
+                str(tmp_converted),
+            ]
+            proc = subprocess.run(cmd, capture_output=True, text=True)
+            if proc.returncode != 0:
+                raise RuntimeError(f"ffmpeg failed to decode webm: {proc.stderr.strip() or proc.stdout.strip()}")
+            path = tmp_converted
+
+        try:
+            import librosa  # local import to keep startup errors clear
+
+            audio, _sr = librosa.load(str(path), sr=16000, mono=True)
+            return audio.astype(np.float32, copy=False)
+        except Exception as e:
+            # Fallback to soundfile for wav/flac/etc.
+            try:
+                import soundfile as sf
+
+                audio, sr = sf.read(str(path), dtype="float32", always_2d=False)
+                if sr != 16000:
+                    from scipy.signal import resample_poly
+
+                    audio = resample_poly(audio, 16000, sr).astype(np.float32, copy=False)
+                if audio.ndim > 1:
+                    audio = np.mean(audio, axis=1).astype(np.float32, copy=False)
+                return audio
+            except Exception as e2:
+                raise RuntimeError(
+                    f"Failed to decode audio. If uploading webm, ensure ffmpeg is installed. "
+                    f"librosa error={type(e).__name__}: {e}; soundfile error={type(e2).__name__}: {e2}"
+                )
+    finally:
+        if tmp_converted is not None:
+            try:
+                if tmp_converted.exists():
+                    tmp_converted.unlink()
+            except Exception:
+                pass
+
+
+print("[MediVoice] Loading ASR (Whisper + LoRA adapter)...")
+if not ADAPTER_DIR.exists():
+    raise RuntimeError(
+        f"Missing Whisper adapter directory at {ADAPTER_DIR}. "
+        "Place adapter_config.json and adapter_model.safetensors there."
+    )
+
+peft_cfg = PeftConfig.from_pretrained(str(ADAPTER_DIR))
+base_asr_id = peft_cfg.base_model_name_or_path or "distil-whisper/distil-large-v3"
+
+# Optional local Whisper base model support (preferred when available)
+WHISPER_MODEL_PATH = os.getenv("WHISPER_MODEL_PATH")  # optional local folder path
+
+def _has_whisper_weights(dir_path: Path) -> bool:
+    if not (dir_path / "config.json").exists():
+        return False
+    # Accept common weight layouts: model.safetensors, sharded safetensors, or pytorch_model.bin
+    if any(dir_path.glob("*.safetensors")):
+        return True
+    if any(dir_path.glob("pytorch_model*.bin")):
+        return True
+    return False
+
+local_whisper_dir = Path(WHISPER_MODEL_PATH).expanduser() if WHISPER_MODEL_PATH else DEFAULT_WHISPER_LOCAL_DIR
+use_local_whisper = _has_whisper_weights(local_whisper_dir)
+if use_local_whisper:
+    print(f"[MediVoice] Using local Whisper base from: {local_whisper_dir}")
+    base_asr_source: str = str(local_whisper_dir)
+    asr_local_only = True
+else:
+    base_asr_source = base_asr_id
+    asr_local_only = False
+
+asr_dtype = torch.float16 if DEVICE.type in ("cuda", "mps") else torch.float32
+asr_base = AutoModelForSpeechSeq2Seq.from_pretrained(
+    base_asr_source,
+    torch_dtype=asr_dtype,
+    low_cpu_mem_usage=True,
+    use_safetensors=True,
+    local_files_only=asr_local_only,
+)
+asr_model = PeftModel.from_pretrained(asr_base, str(ADAPTER_DIR))
+
+try:
+    # Merge LoRA weights for faster inference when possible
+    asr_model = asr_model.merge_and_unload()
+except Exception as merge_err:
+    print(f"[MediVoice] Warning: could not merge LoRA adapter ({merge_err}). Continuing with PeftModel.")
+
+asr_model.to(DEVICE)
+asr_model.eval()
+asr_processor = AutoProcessor.from_pretrained(base_asr_source, local_files_only=asr_local_only)
+
+
+def _transcribe_with_whisper(audio: np.ndarray, sampling_rate: int = 16000) -> str:
+    """
+    Run Whisper directly (no Transformers pipeline) to avoid torchcodec/FFmpeg runtime issues
+    on macOS. Input should be mono float waveform at 16kHz.
+    """
+    inputs = asr_processor(audio, sampling_rate=sampling_rate, return_tensors="pt")
+    input_features = inputs.get("input_features")
+    if input_features is None:
+        raise RuntimeError("Whisper processor did not produce input_features.")
+    input_features = input_features.to(DEVICE, dtype=asr_dtype)
+
+    gen_kwargs: Dict[str, Any] = {"max_new_tokens": 128, "do_sample": False}
+    try:
+        # Provide a transcribe task prompt when supported.
+        forced = asr_processor.get_decoder_prompt_ids(task="transcribe")
+        if forced:
+            gen_kwargs["forced_decoder_ids"] = forced
+    except Exception:
+        pass
+
+    with torch.inference_mode():
+        predicted_ids = asr_model.generate(input_features, **gen_kwargs)
+
+    text = asr_processor.batch_decode(predicted_ids, skip_special_tokens=True)[0]
+    return (text or "").strip()
+
+print("[MediVoice] Loading LLM (MedGemma)...")
+#
+# MedGemma on Hugging Face is published as Gemma 3 variants (e.g. 4B, 27B).
+# The 4B instruction-tuned checkpoint is `google/medgemma-4b-it`:
+# https://huggingface.co/google/medgemma-4b-it
+#
+LLM_ID = os.getenv("MEDGEMMA_MODEL_ID", "google/medgemma-4b-it")
+LLM_PATH = os.getenv("MEDGEMMA_MODEL_PATH")  # optional local folder path
+if (
+    not LLM_PATH
+    and (DEFAULT_MEDGEMMA_LOCAL_DIR / "config.json").exists()
+    and any(DEFAULT_MEDGEMMA_LOCAL_DIR.glob("*.safetensors"))
+):
+    LLM_PATH = str(DEFAULT_MEDGEMMA_LOCAL_DIR)
+    print(f"[MediVoice] Using local MedGemma from: {LLM_PATH}")
+llm_dtype = _llm_dtype_for_device(DEVICE)
+
+llm_source = LLM_PATH if LLM_PATH else LLM_ID
+
+try:
+    # MedGemma 4B is published as an image-text-to-text model; for text-only, we can still use the
+    # chat template and provide only text content.
+    LLM_PROCESSOR = _from_pretrained_with_token(
+        AutoProcessor.from_pretrained, llm_source, trust_remote_code=True
+    )
+except Exception as e:
+    raise RuntimeError(
+        "[MediVoice] Failed to load MedGemma processor. "
+        "If using Hugging Face, ensure you're logged in AND you've accepted the model terms. "
+        "See: https://huggingface.co/google/medgemma-4b-it"
+    ) from e
+
+try:
+    LLM_MODEL = _from_pretrained_with_token(
+        AutoModelForImageTextToText.from_pretrained,
+        llm_source,
+        torch_dtype=llm_dtype,
+        low_cpu_mem_usage=True,
+        trust_remote_code=True,
+        device_map="auto" if DEVICE.type == "cuda" else None,
+    )
+except Exception as e:
+    # Fallback for any text-only variants if user overrides MEDGEMMA_MODEL_ID to a causal LM
+    LLM_MODEL = _from_pretrained_with_token(
+        AutoModelForCausalLM.from_pretrained,
+        llm_source,
+        torch_dtype=llm_dtype,
+        low_cpu_mem_usage=True,
+        trust_remote_code=True,
+        device_map="auto" if DEVICE.type == "cuda" else None,
+    )
+
+if DEVICE.type != "cuda":
+    LLM_MODEL.to(DEVICE)
+LLM_MODEL.eval()
+
+print("[MediVoice] Models loaded successfully.")
+
+
+class VitalsModel(BaseModel):
+    bp: Optional[str] = None
+    temp: Optional[str] = None
+    pulse: Optional[str] = None
+    spo2: Optional[str] = None
+
+
+class VitalsResponse(BaseModel):
+    transcription: str = Field(..., description="ASR transcription text")
+    vitals: VitalsModel = Field(..., description="Extracted vital signs")
+
+
+app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+@app.get("/")
+async def root() -> Dict[str, str]:
+    return {
+        "service": "MediVoice Backend",
+        "status": "ok",
+        "docs": "/docs",
+        "process_audio": "POST /process-audio (multipart/form-data; field name: file)",
+    }
+
+
+@app.get("/health")
+async def health() -> Dict[str, str]:
+    return {"status": "ok"}
+
+
+@app.post("/process-audio", response_model=VitalsResponse)
+async def process_audio(file: UploadFile = File(...)) -> VitalsResponse:
+    TEMP_DIR.mkdir(parents=True, exist_ok=True)
+
+    content_type = (file.content_type or "").lower()
+    if "audio" not in content_type:
+        raise HTTPException(status_code=400, detail=f"Unsupported content-type: {file.content_type}")
+
+    suffix = ".webm"
+    if "wav" in content_type:
+        suffix = ".wav"
+    elif "webm" in content_type:
+        suffix = ".webm"
+    elif file.filename and "." in file.filename:
+        suffix = "." + file.filename.split(".")[-1].lower()
+
+    tmp_path = TEMP_DIR / f"{uuid.uuid4().hex}{suffix}"
+
+    try:
+        data = await file.read()
+        if not data:
+            raise HTTPException(status_code=400, detail="Empty upload")
+        tmp_path.write_bytes(data)
+
+        try:
+            audio = _load_audio_mono_16k(tmp_path)
+        except Exception as e:
+            raise HTTPException(status_code=422, detail=str(e))
+
+        transcript = _transcribe_with_whisper(audio, sampling_rate=16000)
+
+        if not transcript:
+            raise HTTPException(status_code=422, detail="Could not transcribe audio (empty transcript)")
+
+        print(f"[MediVoice] Transcription: {transcript}")
+
+        prompt_primary = (
+            "Extract vital signs from this transcript into STRICT JSON with keys: bp, temp, pulse, spo2.\n"
+            "- Use bp format like \"140/90\" when possible.\n"
+            "- temp should be a number in Celsius if present.\n"
+            "- pulse should be a number (bpm) if present.\n"
+            "- spo2 should be a number (percent) if present.\n"
+            "Return ONLY the JSON object (no markdown, no extra text).\n"
+            f"Transcript: {transcript}"
+        )
+
+        completion = _medgemma_generate(prompt_primary)
+        if not completion or not completion.strip():
+            # One retry with a shorter/less strict prompt in case the model is refusing/terminating early
+            prompt_retry = f"Return a JSON object with bp,temp,pulse,spo2 extracted from: {transcript}"
+            completion = _medgemma_generate(prompt_retry)
+
+        try:
+            vitals_raw = _robust_json_extract(completion)
+        except Exception as e:
+            print(f"[MediVoice] Warning: could not parse JSON from MedGemma output. output={completion!r}")
+            # Return transcription but empty vitals rather than crashing the request.
+            vitals_raw = {}
+
+        vitals_norm = _normalize_vitals(vitals_raw)
+
+        return VitalsResponse(
+            transcription=transcript,
+            vitals=VitalsModel(**vitals_norm),
+        )
+    finally:
+        try:
+            if tmp_path.exists():
+                tmp_path.unlink()
+        except Exception as cleanup_err:
+            print(f"[MediVoice] Warning: temp cleanup failed for {tmp_path}: {cleanup_err}")
+
+
+if __name__ == "__main__":
+    uvicorn.run(app, host="0.0.0.0", port=8000)
+
+

@@ -1,0 +1,18 @@
+# Ignore local model weights/artifacts (large files, should not be pushed)
+/backend/models/
+
+# Frontend dependencies (never commit)
+/frontend/node_modules/
+
+# Local temp artifacts
+/backend/temp/
+
+# Python caches
+__pycache__/
+*.py[cod]
+
+# macOS
+.DS_Store
+**/.DS_Store
+
+

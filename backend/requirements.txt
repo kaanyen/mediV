@@ -1,0 +1,14 @@
+fastapi
+uvicorn
+python-multipart
+torch
+transformers>=4.50.0
+accelerate
+peft>=0.18.0
+librosa
+soundfile
+numpy
+scipy
+bitsandbytes
+
+
