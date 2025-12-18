@@ -1,161 +1,65 @@
-import { Loader2, Mic, Square } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
-import AutoFillInput from "./components/AutoFillInput";
-import VoiceVisualizer from "./components/VoiceVisualizer";
-import { processAudio, type VitalsResponse } from "./services/api";
-import { useAudioRecorder } from "./hooks/useAudioRecorder";
+import { useEffect, useState } from "react";
+import { BrowserRouter, Route, Routes } from "react-router-dom";
+import NurseHome from "./pages/NurseHome";
+import PatientDatabase from "./pages/PatientDatabase";
+import VitalsCapture from "./pages/VitalsCapture";
 
-type VitalsState = {
-  bp: string;
-  temp: string;
-  pulse: string;
-  spo2: string;
-};
-
-const emptyVitals: VitalsState = { bp: "", temp: "", pulse: "", spo2: "" };
-
-export default function App() {
-  const { isRecording, audioBlob, mediaStream, startRecording, stopRecording } = useAudioRecorder();
-
-  const [isProcessing, setIsProcessing] = useState(false);
-  const [transcription, setTranscription] = useState("");
-  const [vitals, setVitals] = useState<VitalsState>(emptyVitals);
-  const [aiFilled, setAiFilled] = useState<Record<keyof VitalsState, boolean>>({
-    bp: false,
-    temp: false,
-    pulse: false,
-    spo2: false
-  });
-  const [error, setError] = useState<string | null>(null);
-
-  const clearFlashTimeout = useRef<number | null>(null);
-
-  const canRecord = useMemo(() => !isProcessing, [isProcessing]);
-
-  const toggleRecording = async () => {
-    setError(null);
-    if (!canRecord) return;
-
-    if (isRecording) {
-      stopRecording();
-      return;
-    }
-
-    try {
-      await startRecording();
-    } catch (e) {
-      setError("Microphone access failed. Please allow microphone permissions in your browser.");
-    }
-  };
-
+function useOnlineStatus(): boolean {
+  const [online, setOnline] = useState(() => navigator.onLine);
   useEffect(() => {
-    if (!audioBlob) return;
-
-    let cancelled = false;
-
-    const run = async () => {
-      setIsProcessing(true);
-      setError(null);
-
-      try {
-        const res: VitalsResponse = await processAudio(audioBlob);
-        if (cancelled) return;
-
-        setTranscription(res.transcription ?? "");
-        setVitals({
-          bp: res.vitals?.bp ?? "",
-          temp: res.vitals?.temp ?? "",
-          pulse: res.vitals?.pulse ?? "",
-          spo2: res.vitals?.spo2 ?? ""
-        });
-
-        const nextFilled = {
-          bp: Boolean(res.vitals?.bp),
-          temp: Boolean(res.vitals?.temp),
-          pulse: Boolean(res.vitals?.pulse),
-          spo2: Boolean(res.vitals?.spo2)
-        };
-        setAiFilled(nextFilled);
-
-        if (clearFlashTimeout.current) window.clearTimeout(clearFlashTimeout.current);
-        clearFlashTimeout.current = window.setTimeout(() => {
-          setAiFilled({ bp: false, temp: false, pulse: false, spo2: false });
-        }, 2000);
-      } catch (e: unknown) {
-        if (cancelled) return;
-        setError("Processing failed. Check the backend terminal logs for details.");
-      } finally {
-        if (!cancelled) setIsProcessing(false);
-      }
-    };
-
-    void run();
-
+    const on = () => setOnline(true);
+    const off = () => setOnline(false);
+    window.addEventListener("online", on);
+    window.addEventListener("offline", off);
     return () => {
-      cancelled = true;
+      window.removeEventListener("online", on);
+      window.removeEventListener("offline", off);
     };
-  }, [audioBlob]);
+  }, []);
+  return online;
+}
 
+function AppShell() {
+  const online = useOnlineStatus();
   return (
     <div className="min-h-full bg-slate-50">
-      <div className="mx-auto max-w-5xl px-6 py-10">
-        <div className="mb-6 flex items-center justify-between gap-4">
-          <div>
-            <div className="text-sm font-semibold text-slate-500">MediVoice</div>
-            <h1 className="text-2xl font-semibold text-slate-900">Vitals Capture</h1>
-          </div>
-
-          <button
-            onClick={toggleRecording}
-            disabled={!canRecord}
-            className={[
-              "inline-flex items-center gap-2 rounded-xl px-4 py-2 font-medium text-white shadow-sm transition",
-              !canRecord ? "cursor-not-allowed bg-slate-400" : "",
-              isRecording ? "bg-red-600 hover:bg-red-700" : "bg-slate-900 hover:bg-slate-800"
-            ].join(" ")}
-          >
-            {isRecording ? <Square className="h-5 w-5" /> : <Mic className="h-5 w-5" />}
-            {isRecording ? "Stop" : "Record"}
-          </button>
-        </div>
-
-        <div className="grid gap-6 lg:grid-cols-[1.1fr_1fr]">
-          <div className="space-y-4">
-            <VoiceVisualizer mediaStream={mediaStream} isRecording={isRecording} />
-
-            <div className="rounded-xl border border-slate-200 bg-white p-4">
-              <div className="mb-2 flex items-center justify-between">
-                <div className="text-sm font-semibold text-slate-700">Transcript</div>
-                {isProcessing && (
-                  <div className="inline-flex items-center gap-2 text-sm text-slate-600">
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                    Processing...
-                  </div>
-                )}
-              </div>
-              <textarea
-                readOnly
-                value={transcription}
-                placeholder="Your transcription will appear here..."
-                className="h-40 w-full resize-none rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900 outline-none"
-              />
-
-              {error && <div className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>}
+      <div className="border-b border-slate-200 bg-white">
+        <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-4">
+          <div className="flex items-center gap-3">
+            <div className="text-sm font-semibold text-slate-900">MediVoice</div>
+            <div className="rounded-full bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-600">
+              Nurse Workflow
             </div>
           </div>
 
-          <div className="rounded-xl border border-slate-200 bg-white p-5">
-            <div className="mb-4 text-sm font-semibold text-slate-700">Extracted Vitals</div>
-            <div className="grid gap-4 sm:grid-cols-2">
-              <AutoFillInput label="Blood Pressure (bp)" value={vitals.bp} isAiFilled={aiFilled.bp} />
-              <AutoFillInput label="Temperature (temp)" value={vitals.temp} isAiFilled={aiFilled.temp} />
-              <AutoFillInput label="Pulse (pulse)" value={vitals.pulse} isAiFilled={aiFilled.pulse} />
-              <AutoFillInput label="SpO₂ (spo2)" value={vitals.spo2} isAiFilled={aiFilled.spo2} />
-            </div>
+          <div className="flex items-center gap-2 text-sm font-semibold text-slate-700">
+            <span
+              className={[
+                "inline-block h-2.5 w-2.5 rounded-full",
+                online ? "bg-emerald-500" : "bg-slate-400"
+              ].join(" ")}
+              aria-label={online ? "Online" : "Offline"}
+              title={online ? "Online" : "Offline"}
+            />
+            Sync Status: {online ? "Online" : "Offline"}
           </div>
         </div>
       </div>
+
+      <Routes>
+        <Route path="/" element={<NurseHome />} />
+        <Route path="/patients" element={<PatientDatabase />} />
+        <Route path="/vitals/:patientId" element={<VitalsCapture />} />
+      </Routes>
     </div>
+  );
+}
+
+export default function App() {
+  return (
+    <BrowserRouter>
+      <AppShell />
+    </BrowserRouter>
   );
 }
 
@@ -183,6 +87,22 @@ Observe:
 - The backend terminal shows the transcription log.
 - The frontend updates with the exact text.
 - The BP and Temp fields flash green and populate with 140/90 and 38.
+*/
+
+/*
+Phase 2 Verification Guide
+
+Test New Patient:
+- Click FAB -> New Patient -> Enter "Kwame" -> Verify navigation to Vitals screen.
+
+Test Voice Fill:
+- Record audio. Verify form fields flash green. Manually change "Temp" from 37 to 38.
+
+Test Queue:
+- Click "Save". Redirect to Home. Verify "Kwame" appears in "Waiting for Consult" column.
+
+Test Existing:
+- Click FAB -> Select Existing -> Search "Kwame" -> Click row -> Verify new Vitals screen opens.
 */
 
 
