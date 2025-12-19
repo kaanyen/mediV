@@ -568,6 +568,10 @@ class VitalsResponse(BaseModel):
     vitals: VitalsModel = Field(..., description="Extracted vital signs")
 
 
+class ExtractVitalsRequest(BaseModel):
+    transcription: str = Field(..., description="Transcription text from Web Speech API or other source")
+
+
 class DiagnosisRequest(BaseModel):
     symptoms: str
     vitals: Dict[str, Any]  # {bp, temp, pulse...}
@@ -620,6 +624,49 @@ async def root() -> Dict[str, str]:
 @app.get("/health")
 async def health() -> Dict[str, str]:
     return {"status": "ok"}
+
+
+@app.post("/extract-vitals", response_model=VitalsResponse)
+async def extract_vitals(req: ExtractVitalsRequest) -> VitalsResponse:
+    """
+    Extract vital signs from a transcription text (no audio processing).
+    Used when frontend provides transcription via Web Speech API.
+    """
+    transcript = (req.transcription or "").strip()
+    if not transcript:
+        raise HTTPException(status_code=400, detail="transcription is required")
+
+    print(f"[MediVoice] Extracting vitals from transcription: {transcript}")
+
+    prompt_primary = (
+        "Extract vital signs from this transcript into STRICT JSON with keys: bp, temp, pulse, spo2.\n"
+        "- Use bp format like \"140/90\" when possible.\n"
+        "- temp should be a number in Celsius if present.\n"
+        "- pulse should be a number (bpm) if present.\n"
+        "- spo2 should be a number (percent) if present.\n"
+        "Return ONLY the JSON object (no markdown, no extra text).\n"
+        f"Transcript: {transcript}"
+    )
+
+    completion = _medgemma_generate(prompt_primary)
+    if not completion or not completion.strip():
+        # One retry with a shorter/less strict prompt in case the model is refusing/terminating early
+        prompt_retry = f"Return a JSON object with bp,temp,pulse,spo2 extracted from: {transcript}"
+        completion = _medgemma_generate(prompt_retry)
+
+    try:
+        vitals_raw = _robust_json_extract(completion)
+    except Exception as e:
+        print(f"[MediVoice] Warning: could not parse JSON from MedGemma output. output={completion!r}")
+        # Return transcription but empty vitals rather than crashing the request.
+        vitals_raw = {}
+
+    vitals_norm = _normalize_vitals(vitals_raw)
+
+    return VitalsResponse(
+        transcription=transcript,
+        vitals=VitalsModel(**vitals_norm),
+    )
 
 
 @app.post("/process-audio", response_model=VitalsResponse)

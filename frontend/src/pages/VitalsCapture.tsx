@@ -1,11 +1,12 @@
-import { Loader2, Mic, Save, Square } from "lucide-react";
+import { AlertCircle, Loader2, Mic, Save, Square } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import AutoFillInput from "../components/AutoFillInput";
 import VoiceVisualizer from "../components/VoiceVisualizer";
 import { useAudioRecorder } from "../hooks/useAudioRecorder";
-import { processAudio, type VitalsResponse } from "../services/api";
+import { extractVitals, processAudio, type VitalsResponse } from "../services/api";
 import { createEncounter, getPatientById, makeId } from "../services/db";
+import { isSpeechRecognitionSupported } from "../utils/speechRecognition";
 import type { Encounter, Patient } from "../types/schema";
 
 type VitalsState = {
@@ -25,7 +26,8 @@ export default function VitalsCapture() {
   const [patient, setPatient] = useState<Patient | null>(null);
   const [patientMissing, setPatientMissing] = useState(false);
 
-  const { isRecording, audioBlob, mediaStream, startRecording, stopRecording } = useAudioRecorder();
+  const webSpeechSupported = isSpeechRecognitionSupported();
+  const { isRecording, audioBlob, mediaStream, transcript, interimTranscript, useWebSpeech, startRecording, stopRecording } = useAudioRecorder(true);
 
   const [isProcessing, setIsProcessing] = useState(false);
   const [transcription, setTranscription] = useState("");
@@ -73,8 +75,17 @@ export default function VitalsCapture() {
     }
   };
 
+  // Update transcription display in real-time from Web Speech API
   useEffect(() => {
-    if (!audioBlob) return;
+    if (transcript) {
+      setTranscription(transcript);
+    }
+  }, [transcript]);
+
+  // Process audio when recording stops (fallback to Whisper)
+  useEffect(() => {
+    // Only process audio blob if we're NOT using Web Speech (fallback mode)
+    if (useWebSpeech || !audioBlob) return;
     let cancelled = false;
 
     const run = async () => {
@@ -124,7 +135,67 @@ export default function VitalsCapture() {
     return () => {
       cancelled = true;
     };
-  }, [audioBlob]);
+  }, [audioBlob, useWebSpeech]);
+
+  const prevIsRecordingRef = useRef(isRecording);
+  
+  // Extract vitals when Web Speech recording stops
+  useEffect(() => {
+    // Only process when recording transitions from true to false
+    const recordingJustStopped = prevIsRecordingRef.current && !isRecording;
+    prevIsRecordingRef.current = isRecording;
+
+    if (!useWebSpeech || !recordingJustStopped || !transcript || !transcript.trim()) return;
+
+    let cancelled = false;
+
+    const run = async () => {
+      setIsProcessing(true);
+      setError(null);
+
+      try {
+        const res: VitalsResponse | null = await extractVitals(transcript);
+        if (cancelled) return;
+
+        if (!res) {
+          setError("AI Server Disconnected. You can still enter vitals manually.");
+          return;
+        }
+
+        setVitals((prev) => ({
+          ...prev,
+          bp: res.vitals?.bp ?? "",
+          temp: res.vitals?.temp ?? "",
+          pulse: res.vitals?.pulse ?? "",
+          spo2: res.vitals?.spo2 ?? ""
+        }));
+
+        const nextFilled = {
+          bp: Boolean(res.vitals?.bp),
+          temp: Boolean(res.vitals?.temp),
+          pulse: Boolean(res.vitals?.pulse),
+          spo2: Boolean(res.vitals?.spo2),
+          weight: false
+        };
+        setAiFilled(nextFilled);
+
+        if (clearFlashTimeout.current) window.clearTimeout(clearFlashTimeout.current);
+        clearFlashTimeout.current = window.setTimeout(() => {
+          setAiFilled({ bp: false, temp: false, pulse: false, spo2: false, weight: false });
+        }, 2000);
+      } catch {
+        if (cancelled) return;
+        setError("Vital extraction failed. You can still enter vitals manually.");
+      } finally {
+        if (!cancelled) setIsProcessing(false);
+      }
+    };
+
+    void run();
+    return () => {
+      cancelled = true;
+    };
+  }, [transcript, useWebSpeech, isRecording]);
 
   const onSave = async () => {
     if (!patientId) return;
@@ -201,12 +272,32 @@ export default function VitalsCapture() {
                 </div>
               )}
             </div>
-            <textarea
-              value={transcription}
-              onChange={(e) => setTranscription(e.target.value)}
-              placeholder="Transcription will appear here..."
-              className="h-44 w-full resize-none rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900 outline-none"
-            />
+            <div className="relative">
+              <textarea
+                value={transcription}
+                onChange={(e) => setTranscription(e.target.value)}
+                placeholder="Transcription will appear here..."
+                className="h-44 w-full resize-none rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900 outline-none"
+              />
+              {/* Real-time interim transcript overlay */}
+              {isRecording && interimTranscript && (
+                <div className="pointer-events-none absolute inset-0 flex items-start px-3 py-2">
+                  <div className="text-sm italic text-slate-400">
+                    {transcription}
+                    <span className="text-slate-500">{interimTranscript}</span>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {!webSpeechSupported && (
+              <div className="mt-3 flex items-start gap-2 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                <AlertCircle className="h-4 w-4 mt-0.5 flex-shrink-0" />
+                <div>
+                  Web Speech API not supported in this browser. Using Whisper backend for transcription.
+                </div>
+              </div>
+            )}
 
             {error && <div className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>}
           </div>

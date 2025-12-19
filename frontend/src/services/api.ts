@@ -100,6 +100,18 @@ export async function processAudio(audioBlob: Blob): Promise<VitalsResponse | nu
   }
 }
 
+export async function extractVitals(transcription: string): Promise<VitalsResponse | null> {
+  try {
+    const res = await api.post<VitalsResponse>("/extract-vitals", {
+      transcription: transcription.trim()
+    });
+    return res.data;
+  } catch (err) {
+    console.error("[MediVoice] Vital extraction failed:", err);
+    return null;
+  }
+}
+
 export async function getDiagnosis(data: DiagnosisRequest): Promise<DiagnosisResponse | null> {
   try {
     const res = await api.post<DiagnosisResponse>("/diagnose", data);
