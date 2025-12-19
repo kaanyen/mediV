@@ -46,8 +46,8 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000
 const api = axios.create({
   baseURL: API_BASE_URL,
   headers: {
-    // CRITICAL: This bypasses the Ngrok "Visit Site" warning page on mobile
-    "ngrok-skip-browser-warning": "true", 
+    // CRITICAL: This header bypasses the Ngrok warning page on mobile
+    "ngrok-skip-browser-warning": "true",
     "Content-Type": "application/json",
   }
 });
