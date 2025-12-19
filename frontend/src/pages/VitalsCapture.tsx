@@ -68,6 +68,11 @@ export default function VitalsCapture() {
       return;
     }
 
+    // Clear previous transcription and vitals when starting new recording
+    setTranscription("");
+    setVitals(emptyVitals);
+    setAiFilled({ bp: false, temp: false, pulse: false, spo2: false, weight: false });
+
     try {
       await startRecording();
     } catch {
@@ -138,64 +143,104 @@ export default function VitalsCapture() {
   }, [audioBlob, useWebSpeech]);
 
   const prevIsRecordingRef = useRef(isRecording);
+  const hasExtractedRef = useRef(false); // Track if we've already extracted for this recording session
+  const wasUsingWebSpeechRef = useRef(false); // Track if Web Speech was used for this session
   
   // Extract vitals when Web Speech recording stops
   useEffect(() => {
+    // Track if we're using Web Speech
+    if (isRecording && useWebSpeech) {
+      wasUsingWebSpeechRef.current = true;
+      hasExtractedRef.current = false;
+    }
+
     // Only process when recording transitions from true to false
     const recordingJustStopped = prevIsRecordingRef.current && !isRecording;
     prevIsRecordingRef.current = isRecording;
 
-    if (!useWebSpeech || !recordingJustStopped || !transcript || !transcript.trim()) return;
+    // Reset flags when starting new recording
+    if (isRecording) {
+      hasExtractedRef.current = false;
+      wasUsingWebSpeechRef.current = useWebSpeech;
+    }
 
+    // Only extract if:
+    // 1. We were using Web Speech
+    // 2. Recording just stopped
+    // 3. We have a transcript
+    // 4. We haven't already extracted
+    // 5. We're not already processing
+    if (!wasUsingWebSpeechRef.current || !recordingJustStopped || !transcript || !transcript.trim()) {
+      // Reset flag if recording started again
+      if (isRecording) {
+        wasUsingWebSpeechRef.current = false;
+      }
+      return;
+    }
+    if (hasExtractedRef.current) return;
+    if (isProcessing) return;
+
+    hasExtractedRef.current = true;
     let cancelled = false;
 
-    const run = async () => {
-      setIsProcessing(true);
-      setError(null);
+    // Small delay to ensure transcript is finalized
+    const timeoutId = window.setTimeout(() => {
+      const run = async () => {
+        setIsProcessing(true);
+        setError(null);
 
-      try {
-        const res: VitalsResponse | null = await extractVitals(transcript);
-        if (cancelled) return;
+        try {
+          const finalTranscript = transcript.trim();
+          if (!finalTranscript) {
+            setIsProcessing(false);
+            return;
+          }
 
-        if (!res) {
-          setError("AI Server Disconnected. You can still enter vitals manually.");
-          return;
+          const res: VitalsResponse | null = await extractVitals(finalTranscript);
+          if (cancelled) return;
+
+          if (!res) {
+            setError("AI Server Disconnected. You can still enter vitals manually.");
+            return;
+          }
+
+          setVitals((prev) => ({
+            ...prev,
+            bp: res.vitals?.bp ?? "",
+            temp: res.vitals?.temp ?? "",
+            pulse: res.vitals?.pulse ?? "",
+            spo2: res.vitals?.spo2 ?? ""
+          }));
+
+          const nextFilled = {
+            bp: Boolean(res.vitals?.bp),
+            temp: Boolean(res.vitals?.temp),
+            pulse: Boolean(res.vitals?.pulse),
+            spo2: Boolean(res.vitals?.spo2),
+            weight: false
+          };
+          setAiFilled(nextFilled);
+
+          if (clearFlashTimeout.current) window.clearTimeout(clearFlashTimeout.current);
+          clearFlashTimeout.current = window.setTimeout(() => {
+            setAiFilled({ bp: false, temp: false, pulse: false, spo2: false, weight: false });
+          }, 2000);
+        } catch {
+          if (cancelled) return;
+          setError("Vital extraction failed. You can still enter vitals manually.");
+        } finally {
+          if (!cancelled) setIsProcessing(false);
         }
+      };
 
-        setVitals((prev) => ({
-          ...prev,
-          bp: res.vitals?.bp ?? "",
-          temp: res.vitals?.temp ?? "",
-          pulse: res.vitals?.pulse ?? "",
-          spo2: res.vitals?.spo2 ?? ""
-        }));
+      void run();
+    }, 300); // 300ms delay to ensure transcript is finalized
 
-        const nextFilled = {
-          bp: Boolean(res.vitals?.bp),
-          temp: Boolean(res.vitals?.temp),
-          pulse: Boolean(res.vitals?.pulse),
-          spo2: Boolean(res.vitals?.spo2),
-          weight: false
-        };
-        setAiFilled(nextFilled);
-
-        if (clearFlashTimeout.current) window.clearTimeout(clearFlashTimeout.current);
-        clearFlashTimeout.current = window.setTimeout(() => {
-          setAiFilled({ bp: false, temp: false, pulse: false, spo2: false, weight: false });
-        }, 2000);
-      } catch {
-        if (cancelled) return;
-        setError("Vital extraction failed. You can still enter vitals manually.");
-      } finally {
-        if (!cancelled) setIsProcessing(false);
-      }
-    };
-
-    void run();
     return () => {
       cancelled = true;
+      window.clearTimeout(timeoutId);
     };
-  }, [transcript, useWebSpeech, isRecording]);
+  }, [transcript, useWebSpeech, isRecording, isProcessing]);
 
   const onSave = async () => {
     if (!patientId) return;

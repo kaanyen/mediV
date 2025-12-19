@@ -74,6 +74,9 @@ export default function Consultation() {
       return;
     }
 
+    // Clear previous symptoms when starting new recording
+    setSymptoms("");
+
     try {
       await startRecording();
     } catch {

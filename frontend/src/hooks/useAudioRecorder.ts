@@ -117,7 +117,7 @@ export function useAudioRecorder(useWebSpeech: boolean = true): RecorderState {
     mediaStream,
     transcript: speechRecognition.transcript,
     interimTranscript: speechRecognition.interimTranscript,
-    useWebSpeech: shouldUseWebSpeech && actualIsRecording,
+    useWebSpeech: shouldUseWebSpeech, // Always return true if Web Speech is being used, not just when recording
     startRecording,
     stopRecording,
   };

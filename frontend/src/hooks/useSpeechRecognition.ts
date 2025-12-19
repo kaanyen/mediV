@@ -44,6 +44,8 @@ export function useSpeechRecognition(): SpeechRecognitionState {
       setIsListening(true);
       setError(null);
       finalTranscriptRef.current = "";
+      setTranscript(""); // Clear transcript state immediately
+      setInterimTranscript(""); // Clear interim transcript
     };
 
     recognition.onresult = (event: any) => {
