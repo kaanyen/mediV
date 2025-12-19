@@ -43,6 +43,11 @@ export type ConfirmDiagnosisResponse = {
 // Use environment variable for API URL, fallback to localhost for development
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
 
+// Debug log (only in development)
+if (import.meta.env.DEV) {
+  console.log("[MediVoice] API Base URL:", API_BASE_URL);
+}
+
 const api = axios.create({
   baseURL: API_BASE_URL,
   headers: {
@@ -57,10 +62,11 @@ function toastAiDisconnectedOnce() {
   const now = Date.now();
   if (now - lastAiToastAt < 4000) return;
   lastAiToastAt = now;
+  const apiUrl = API_BASE_URL || "localhost:8000";
   toast({
     type: "error",
     title: "AI Server Disconnected",
-    message: "Please check the Python backend connection (port 8000)."
+    message: `Cannot reach backend at ${apiUrl}. Check ngrok/Vercel config.`
   });
 }
 
@@ -84,11 +90,12 @@ export async function processAudio(audioBlob: Blob): Promise<VitalsResponse | nu
     const res = await api.post<VitalsResponse>("/process-audio", formData, {
       headers: { 
         "Content-Type": "multipart/form-data",
-        // Axios merges this with the instance headers, so the skip-warning header persists
+        "ngrok-skip-browser-warning": "true", // Explicitly include for multipart requests
       }
     });
     return res.data;
-  } catch {
+  } catch (err) {
+    console.error("[MediVoice] Audio processing failed:", err);
     return null;
   }
 }

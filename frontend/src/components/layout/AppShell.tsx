@@ -47,19 +47,17 @@ function useAiStatus(pollMs = 6000): AiStatus {
         return;
       }
       try {
-        const res = await fetch(`${API_BASE_URL}/health`, { method: "GET" });
+        const res = await fetch(`${API_BASE_URL}/health`, {
+          method: "GET",
+          headers: {
+            "ngrok-skip-browser-warning": "true", // Bypass ngrok warning page
+          },
+        });
         if (!cancelled) setStatus(res.ok ? "ready" : "offline");
-      } catch {
+      } catch (err) {
         if (!cancelled) setStatus("offline");
-        const now = Date.now();
-        if (now - lastToastAt > 7000) {
-          lastToastAt = now;
-          toast({
-            type: "error",
-            title: "AI Server Offline",
-            message: "Python backend is unreachable. You can continue with manual entry."
-          });
-        }
+        // Don't show toast on every health check failure - only show on actual API calls
+        // The toast is handled by api.ts interceptors
       }
     }
 
