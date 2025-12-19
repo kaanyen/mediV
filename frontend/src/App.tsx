@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { BrowserRouter, Route, Routes } from "react-router-dom";
 import AppShell from "./components/layout/AppShell";
 import DoctorHome from "./pages/DoctorHome";
@@ -8,7 +9,41 @@ import Consultation from "./pages/Consultation";
 import PostLabConsult from "./pages/PostLabConsult";
 import VitalsCapture from "./pages/VitalsCapture";
 
+// Test API connectivity on app load (especially for mobile debugging)
+function useApiConnectivityTest() {
+  useEffect(() => {
+    const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
+    console.log("[MediVoice] App loaded. Testing API connectivity to:", API_BASE_URL);
+    
+    // Direct fetch test (bypasses axios and service worker)
+    fetch(`${API_BASE_URL}/health`, {
+      method: "GET",
+      headers: {
+        "ngrok-skip-browser-warning": "true",
+      },
+      cache: "no-store", // Force network request, bypass cache
+    })
+      .then((res) => {
+        console.log("[MediVoice] Direct fetch test - Status:", res.status);
+        return res.json();
+      })
+      .then((data) => {
+        console.log("[MediVoice] Direct fetch test - Success:", data);
+      })
+      .catch((err) => {
+        console.error("[MediVoice] Direct fetch test - Failed:", err);
+        console.error("[MediVoice] Error details:", {
+          message: err.message,
+          name: err.name,
+          stack: err.stack,
+        });
+      });
+  }, []);
+}
+
 export default function App() {
+  useApiConnectivityTest();
+  
   return (
     <BrowserRouter>
       <AppShell>

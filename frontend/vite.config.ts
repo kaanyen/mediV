@@ -10,7 +10,16 @@ export default defineConfig({
       injectRegister: "auto",
       strategies: "generateSW",
       workbox: {
-        cleanupOutdatedCaches: true
+        cleanupOutdatedCaches: true,
+        // CRITICAL: Don't intercept fetch requests for external APIs
+        // Service worker should only handle navigation, not API calls
+        navigateFallback: null,
+        navigateFallbackDenylist: [/^\/_/, /\/[^/?]+\.[^/]+$/],
+        // Don't set up any runtime caching - let all API requests go to network
+        runtimeCaching: [],
+        // Ensure fetch requests bypass service worker
+        skipWaiting: true,
+        clientsClaim: true,
       },
       manifest: {
         name: "MediVoice AI",
