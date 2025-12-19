@@ -50,6 +50,9 @@ export default function VitalsCapture() {
     weight: false
   });
   const [error, setError] = useState<string | null>(null);
+  const [transcriptionMode, setTranscriptionMode] = useState<"live" | "backend">(
+    speechSupported ? "live" : "backend"
+  );
 
   const clearFlashTimeout = useRef<number | null>(null);
   const canRecord = useMemo(() => !isProcessing, [isProcessing]);
@@ -79,7 +82,7 @@ export default function VitalsCapture() {
 
     if (isRecording) {
       stopRecording();
-      if (speechSupported) {
+      if (speechSupported && transcriptionMode === "live") {
         stopSpeech();
       }
       return;
@@ -90,7 +93,7 @@ export default function VitalsCapture() {
       resetSpeech();
       setTranscription("");
       await startRecording();
-      if (speechSupported) {
+      if (speechSupported && transcriptionMode === "live") {
         startSpeech();
       }
     } catch {
@@ -98,14 +101,14 @@ export default function VitalsCapture() {
     }
   };
 
-  // While recording, keep the textarea in sync with live Web Speech transcript
+  // While recording, keep the textarea in sync with live Web Speech transcript (only in live mode)
   useEffect(() => {
-    if (!isRecording || !speechSupported) return;
+    if (!isRecording || !speechSupported || transcriptionMode !== "live") return;
     const combined = [liveTranscript, interimTranscript].filter(Boolean).join(" ").trim();
     if (combined) {
       setTranscription(combined);
     }
-  }, [isRecording, speechSupported, liveTranscript, interimTranscript]);
+  }, [isRecording, speechSupported, transcriptionMode, liveTranscript, interimTranscript]);
 
   useEffect(() => {
     if (!audioBlob) return;
@@ -124,7 +127,11 @@ export default function VitalsCapture() {
           return;
         }
 
-        setTranscription(res.transcription ?? "");
+        // In backend mode, replace transcription. In live mode, keep live transcript but update vitals
+        if (transcriptionMode === "backend") {
+          setTranscription(res.transcription ?? "");
+        }
+        
         setVitals((prev) => ({
           ...prev,
           bp: res.vitals?.bp ?? "",
@@ -158,7 +165,7 @@ export default function VitalsCapture() {
     return () => {
       cancelled = true;
     };
-  }, [audioBlob]);
+  }, [audioBlob, transcriptionMode]);
 
   const onSave = async () => {
     if (!patientId) return;
@@ -207,18 +214,50 @@ export default function VitalsCapture() {
           <h1 className="text-2xl font-semibold text-slate-900">Vitals Check: {patient?.name ?? "..."}</h1>
         </div>
 
-        <button
-          onClick={toggleRecording}
-          disabled={!canRecord}
-          className={[
-            "inline-flex items-center gap-2 rounded-xl px-4 py-2 font-semibold text-white shadow-sm transition",
-            !canRecord ? "cursor-not-allowed bg-slate-400" : "",
-            isRecording ? "bg-red-600 hover:bg-red-700" : "bg-slate-900 hover:bg-slate-800"
-          ].join(" ")}
-        >
-          {isRecording ? <Square className="h-5 w-5" /> : <Mic className="h-5 w-5" />}
-          {isRecording ? "Stop Recording" : "Start Recording"}
-        </button>
+        <div className="flex items-center gap-3">
+          {speechSupported && (
+            <div className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white p-1">
+              <button
+                onClick={() => setTranscriptionMode("live")}
+                disabled={isRecording}
+                className={[
+                  "rounded-md px-3 py-1.5 text-xs font-semibold transition",
+                  transcriptionMode === "live"
+                    ? "bg-slate-900 text-white"
+                    : "text-slate-600 hover:bg-slate-50",
+                  isRecording ? "cursor-not-allowed opacity-50" : ""
+                ].join(" ")}
+              >
+                Live
+              </button>
+              <button
+                onClick={() => setTranscriptionMode("backend")}
+                disabled={isRecording}
+                className={[
+                  "rounded-md px-3 py-1.5 text-xs font-semibold transition",
+                  transcriptionMode === "backend"
+                    ? "bg-slate-900 text-white"
+                    : "text-slate-600 hover:bg-slate-50",
+                  isRecording ? "cursor-not-allowed opacity-50" : ""
+                ].join(" ")}
+              >
+                Backend
+              </button>
+            </div>
+          )}
+          <button
+            onClick={toggleRecording}
+            disabled={!canRecord}
+            className={[
+              "inline-flex items-center gap-2 rounded-xl px-4 py-2 font-semibold text-white shadow-sm transition",
+              !canRecord ? "cursor-not-allowed bg-slate-400" : "",
+              isRecording ? "bg-red-600 hover:bg-red-700" : "bg-slate-900 hover:bg-slate-800"
+            ].join(" ")}
+          >
+            {isRecording ? <Square className="h-5 w-5" /> : <Mic className="h-5 w-5" />}
+            {isRecording ? "Stop Recording" : "Start Recording"}
+          </button>
+        </div>
       </div>
 
       <div className="grid gap-6 lg:grid-cols-[1.1fr_1fr]">
@@ -229,8 +268,10 @@ export default function VitalsCapture() {
             <div className="mb-2 flex items-center justify-between">
               <div className="text-sm font-semibold text-slate-700">Raw Transcription</div>
               <div className="flex items-center gap-3 text-xs text-slate-600">
-                {speechSupported ? (
+                {transcriptionMode === "live" && speechSupported ? (
                   <span>{isListening ? "Live transcription (Web Speech) active..." : "Click record to start live transcription"}</span>
+                ) : transcriptionMode === "backend" ? (
+                  <span>Backend transcription (Whisper) will process after recording</span>
                 ) : (
                   <span>Your browser does not support live speech recognition. Audio will be processed after recording.</span>
                 )}

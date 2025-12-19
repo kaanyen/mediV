@@ -49,6 +49,9 @@ export default function Consultation() {
   const [isDiagnosing, setIsDiagnosing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [manualDiagnosis, setManualDiagnosis] = useState("");
+  const [transcriptionMode, setTranscriptionMode] = useState<"live" | "backend">(
+    speechSupported ? "live" : "backend"
+  );
 
   const [labModalOpen, setLabModalOpen] = useState(false);
 
@@ -84,7 +87,7 @@ export default function Consultation() {
 
     if (isRecording) {
       stopRecording();
-      if (speechSupported) {
+      if (speechSupported && transcriptionMode === "live") {
         stopSpeech();
       }
       return;
@@ -94,7 +97,7 @@ export default function Consultation() {
       resetSpeech();
       setSymptoms("");
       await startRecording();
-      if (speechSupported) {
+      if (speechSupported && transcriptionMode === "live") {
         startSpeech();
       }
     } catch {
@@ -102,14 +105,14 @@ export default function Consultation() {
     }
   };
 
-  // While recording, sync textarea with live Web Speech transcript
+  // While recording, sync textarea with live Web Speech transcript (only in live mode)
   useEffect(() => {
-    if (!isRecording || !speechSupported) return;
+    if (!isRecording || !speechSupported || transcriptionMode !== "live") return;
     const combined = [liveTranscript, interimTranscript].filter(Boolean).join(" ").trim();
     if (combined) {
       setSymptoms(combined);
     }
-  }, [isRecording, speechSupported, liveTranscript, interimTranscript]);
+  }, [isRecording, speechSupported, transcriptionMode, liveTranscript, interimTranscript]);
 
   useEffect(() => {
     if (!audioBlob) return;
@@ -125,11 +128,14 @@ export default function Consultation() {
           setError("AI Server Disconnected. You can type symptoms manually.");
           return;
         }
-        const next = res.transcription ?? "";
-        setSymptoms(next);
-        setFlashSymptoms(true);
-        if (clearFlashTimeout.current) window.clearTimeout(clearFlashTimeout.current);
-        clearFlashTimeout.current = window.setTimeout(() => setFlashSymptoms(false), 1200);
+        // In backend mode, replace symptoms. In live mode, keep live transcript
+        if (transcriptionMode === "backend") {
+          const next = res.transcription ?? "";
+          setSymptoms(next);
+          setFlashSymptoms(true);
+          if (clearFlashTimeout.current) window.clearTimeout(clearFlashTimeout.current);
+          clearFlashTimeout.current = window.setTimeout(() => setFlashSymptoms(false), 1200);
+        }
       } catch {
         if (cancelled) return;
         setError("Transcription failed. You can type symptoms manually.");
@@ -142,7 +148,7 @@ export default function Consultation() {
     return () => {
       cancelled = true;
     };
-  }, [audioBlob]);
+  }, [audioBlob, transcriptionMode]);
 
   const onDiagnose = async () => {
     if (!encounter) return;
@@ -205,18 +211,50 @@ export default function Consultation() {
           <h1 className="text-2xl font-semibold text-slate-900">{patient?.name ?? "Patient"}</h1>
           <div className="mt-1 text-sm text-slate-600">{patient ? `${patient.age} • ${patient.sex}` : "Patient details missing"}</div>
         </div>
-        <button
-          onClick={toggleRecording}
-          disabled={!canRecord}
-          className={[
-            "inline-flex items-center gap-2 rounded-xl px-4 py-2 font-semibold text-white shadow-sm transition",
-            !canRecord ? "cursor-not-allowed bg-slate-400" : "",
-            isRecording ? "bg-red-600 hover:bg-red-700" : "bg-slate-900 hover:bg-slate-800"
-          ].join(" ")}
-        >
-          {isRecording ? <Square className="h-5 w-5" /> : <Mic className="h-5 w-5" />}
-          {isRecording ? "Stop Recording" : "Start Recording"}
-        </button>
+        <div className="flex items-center gap-3">
+          {speechSupported && (
+            <div className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white p-1">
+              <button
+                onClick={() => setTranscriptionMode("live")}
+                disabled={isRecording}
+                className={[
+                  "rounded-md px-3 py-1.5 text-xs font-semibold transition",
+                  transcriptionMode === "live"
+                    ? "bg-slate-900 text-white"
+                    : "text-slate-600 hover:bg-slate-50",
+                  isRecording ? "cursor-not-allowed opacity-50" : ""
+                ].join(" ")}
+              >
+                Live
+              </button>
+              <button
+                onClick={() => setTranscriptionMode("backend")}
+                disabled={isRecording}
+                className={[
+                  "rounded-md px-3 py-1.5 text-xs font-semibold transition",
+                  transcriptionMode === "backend"
+                    ? "bg-slate-900 text-white"
+                    : "text-slate-600 hover:bg-slate-50",
+                  isRecording ? "cursor-not-allowed opacity-50" : ""
+                ].join(" ")}
+              >
+                Backend
+              </button>
+            </div>
+          )}
+          <button
+            onClick={toggleRecording}
+            disabled={!canRecord}
+            className={[
+              "inline-flex items-center gap-2 rounded-xl px-4 py-2 font-semibold text-white shadow-sm transition",
+              !canRecord ? "cursor-not-allowed bg-slate-400" : "",
+              isRecording ? "bg-red-600 hover:bg-red-700" : "bg-slate-900 hover:bg-slate-800"
+            ].join(" ")}
+          >
+            {isRecording ? <Square className="h-5 w-5" /> : <Mic className="h-5 w-5" />}
+            {isRecording ? "Stop Recording" : "Start Recording"}
+          </button>
+        </div>
       </div>
 
       <div className="grid gap-6 lg:grid-cols-[1.1fr_0.9fr]">
@@ -238,10 +276,12 @@ export default function Consultation() {
               <div className="flex flex-col gap-1">
                 <div className="text-sm font-semibold text-slate-700">History of Present Illness / Symptoms</div>
                 <div className="text-xs text-slate-600">
-                  {speechSupported
+                  {transcriptionMode === "live" && speechSupported
                     ? isListening
                       ? "Live transcription (Web Speech) is capturing as you speak..."
                       : "Click record to start live transcription, or type symptoms manually."
+                    : transcriptionMode === "backend"
+                    ? "Backend transcription (Whisper) will process after recording"
                     : "Your browser does not support live speech recognition; audio will be transcribed after recording."}
                 </div>
               </div>
