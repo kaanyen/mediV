@@ -44,7 +44,12 @@ export type ConfirmDiagnosisResponse = {
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
 
 const api = axios.create({
-  baseURL: API_BASE_URL
+  baseURL: API_BASE_URL,
+  headers: {
+    // CRITICAL: This bypasses the Ngrok "Visit Site" warning page on mobile
+    "ngrok-skip-browser-warning": "true", 
+    "Content-Type": "application/json",
+  }
 });
 
 let lastAiToastAt = 0;
@@ -77,7 +82,10 @@ export async function processAudio(audioBlob: Blob): Promise<VitalsResponse | nu
 
   try {
     const res = await api.post<VitalsResponse>("/process-audio", formData, {
-      headers: { "Content-Type": "multipart/form-data" }
+      headers: { 
+        "Content-Type": "multipart/form-data",
+        // Axios merges this with the instance headers, so the skip-warning header persists
+      }
     });
     return res.data;
   } catch {

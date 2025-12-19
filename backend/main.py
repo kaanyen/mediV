@@ -566,14 +566,10 @@ app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    # Allow both dev (5173) and production preview (4173) origins locally.
-    allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-        "http://localhost:4173",
-        "http://127.0.0.1:4173",
-    ],
-    allow_credentials=True,
+    # Allow all origins (needed for ngrok which has changing URLs, and Vercel preview deployments)
+    # In production, you should restrict this to specific domains.
+    allow_origins=["*"],
+    allow_credentials=False,  # Must be False when allow_origins=["*"]
     allow_methods=["*"],
     allow_headers=["*"],
 )
