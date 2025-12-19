@@ -88,13 +88,14 @@ export default function Consultation() {
   useEffect(() => {
     if (useWebSpeech && transcript) {
       setSymptoms(transcript);
+      // Flash effect when transcript updates
       setFlashSymptoms(true);
       if (clearFlashTimeout.current) window.clearTimeout(clearFlashTimeout.current);
       clearFlashTimeout.current = window.setTimeout(() => setFlashSymptoms(false), 1200);
     }
   }, [transcript, useWebSpeech]);
 
-  // Process audio when recording stops (fallback to Whisper)
+  // Process audio when recording stops (fallback to Whisper only)
   useEffect(() => {
     // Only process audio blob if we're NOT using Web Speech (fallback mode)
     if (useWebSpeech || !audioBlob) return;

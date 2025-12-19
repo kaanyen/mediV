@@ -72,6 +72,7 @@ export default function VitalsCapture() {
     setTranscription("");
     setVitals(emptyVitals);
     setAiFilled({ bp: false, temp: false, pulse: false, spo2: false, weight: false });
+    lastExtractedTranscriptRef.current = ""; // Reset extraction tracking
 
     try {
       await startRecording();
@@ -80,6 +81,9 @@ export default function VitalsCapture() {
     }
   };
 
+  const extractionTimeoutRef = useRef<number | null>(null);
+  const lastExtractedTranscriptRef = useRef("");
+
   // Update transcription display in real-time from Web Speech API
   useEffect(() => {
     if (transcript) {
@@ -87,7 +91,90 @@ export default function VitalsCapture() {
     }
   }, [transcript]);
 
-  // Process audio when recording stops (fallback to Whisper)
+  // Real-time vital extraction from Web Speech API (debounced)
+  useEffect(() => {
+    // Only extract if using Web Speech and we have a transcript
+    if (!useWebSpeech || !isRecording || !transcript || !transcript.trim()) {
+      return;
+    }
+
+    // Skip if transcript hasn't changed meaningfully (avoid duplicate extractions)
+    const transcriptChanged = transcript.trim() !== lastExtractedTranscriptRef.current.trim();
+    if (!transcriptChanged) {
+      return;
+    }
+
+    // Clear previous timeout
+    if (extractionTimeoutRef.current) {
+      window.clearTimeout(extractionTimeoutRef.current);
+    }
+
+    // Debounce extraction: wait 1.5 seconds after user stops speaking
+    extractionTimeoutRef.current = window.setTimeout(() => {
+      const currentTranscript = transcript.trim();
+      if (!currentTranscript || currentTranscript === lastExtractedTranscriptRef.current.trim()) {
+        return;
+      }
+
+      lastExtractedTranscriptRef.current = currentTranscript;
+      let cancelled = false;
+
+      const run = async () => {
+        setIsProcessing(true);
+        setError(null);
+
+        try {
+          const res: VitalsResponse | null = await extractVitals(currentTranscript);
+          if (cancelled) return;
+
+          if (!res) {
+            setError("AI Server Disconnected. You can still enter vitals manually.");
+            return;
+          }
+
+          // Only update vitals if we got new values (merge strategy)
+          setVitals((prev) => ({
+            bp: res.vitals?.bp || prev.bp,
+            temp: res.vitals?.temp || prev.temp,
+            pulse: res.vitals?.pulse || prev.pulse,
+            spo2: res.vitals?.spo2 || prev.spo2,
+            weight: prev.weight
+          }));
+
+          // Flash fields that were just filled
+          const nextFilled = {
+            bp: Boolean(res.vitals?.bp),
+            temp: Boolean(res.vitals?.temp),
+            pulse: Boolean(res.vitals?.pulse),
+            spo2: Boolean(res.vitals?.spo2),
+            weight: false
+          };
+          setAiFilled(nextFilled);
+
+          if (clearFlashTimeout.current) window.clearTimeout(clearFlashTimeout.current);
+          clearFlashTimeout.current = window.setTimeout(() => {
+            setAiFilled({ bp: false, temp: false, pulse: false, spo2: false, weight: false });
+          }, 2000);
+        } catch {
+          if (cancelled) return;
+          // Don't show error for real-time extraction failures, just log
+          console.warn("[VitalsCapture] Real-time extraction failed");
+        } finally {
+          if (!cancelled) setIsProcessing(false);
+        }
+      };
+
+      void run();
+    }, 1500); // 1.5 second debounce
+
+    return () => {
+      if (extractionTimeoutRef.current) {
+        window.clearTimeout(extractionTimeoutRef.current);
+      }
+    };
+  }, [transcript, useWebSpeech, isRecording]);
+
+  // Process audio when recording stops (fallback to Whisper only)
   useEffect(() => {
     // Only process audio blob if we're NOT using Web Speech (fallback mode)
     if (useWebSpeech || !audioBlob) return;
@@ -141,106 +228,6 @@ export default function VitalsCapture() {
       cancelled = true;
     };
   }, [audioBlob, useWebSpeech]);
-
-  const prevIsRecordingRef = useRef(isRecording);
-  const hasExtractedRef = useRef(false); // Track if we've already extracted for this recording session
-  const wasUsingWebSpeechRef = useRef(false); // Track if Web Speech was used for this session
-  
-  // Extract vitals when Web Speech recording stops
-  useEffect(() => {
-    // Track if we're using Web Speech
-    if (isRecording && useWebSpeech) {
-      wasUsingWebSpeechRef.current = true;
-      hasExtractedRef.current = false;
-    }
-
-    // Only process when recording transitions from true to false
-    const recordingJustStopped = prevIsRecordingRef.current && !isRecording;
-    prevIsRecordingRef.current = isRecording;
-
-    // Reset flags when starting new recording
-    if (isRecording) {
-      hasExtractedRef.current = false;
-      wasUsingWebSpeechRef.current = useWebSpeech;
-    }
-
-    // Only extract if:
-    // 1. We were using Web Speech
-    // 2. Recording just stopped
-    // 3. We have a transcript
-    // 4. We haven't already extracted
-    // 5. We're not already processing
-    if (!wasUsingWebSpeechRef.current || !recordingJustStopped || !transcript || !transcript.trim()) {
-      // Reset flag if recording started again
-      if (isRecording) {
-        wasUsingWebSpeechRef.current = false;
-      }
-      return;
-    }
-    if (hasExtractedRef.current) return;
-    if (isProcessing) return;
-
-    hasExtractedRef.current = true;
-    let cancelled = false;
-
-    // Small delay to ensure transcript is finalized
-    const timeoutId = window.setTimeout(() => {
-      const run = async () => {
-        setIsProcessing(true);
-        setError(null);
-
-        try {
-          const finalTranscript = transcript.trim();
-          if (!finalTranscript) {
-            setIsProcessing(false);
-            return;
-          }
-
-          const res: VitalsResponse | null = await extractVitals(finalTranscript);
-          if (cancelled) return;
-
-          if (!res) {
-            setError("AI Server Disconnected. You can still enter vitals manually.");
-            return;
-          }
-
-          setVitals((prev) => ({
-            ...prev,
-            bp: res.vitals?.bp ?? "",
-            temp: res.vitals?.temp ?? "",
-            pulse: res.vitals?.pulse ?? "",
-            spo2: res.vitals?.spo2 ?? ""
-          }));
-
-          const nextFilled = {
-            bp: Boolean(res.vitals?.bp),
-            temp: Boolean(res.vitals?.temp),
-            pulse: Boolean(res.vitals?.pulse),
-            spo2: Boolean(res.vitals?.spo2),
-            weight: false
-          };
-          setAiFilled(nextFilled);
-
-          if (clearFlashTimeout.current) window.clearTimeout(clearFlashTimeout.current);
-          clearFlashTimeout.current = window.setTimeout(() => {
-            setAiFilled({ bp: false, temp: false, pulse: false, spo2: false, weight: false });
-          }, 2000);
-        } catch {
-          if (cancelled) return;
-          setError("Vital extraction failed. You can still enter vitals manually.");
-        } finally {
-          if (!cancelled) setIsProcessing(false);
-        }
-      };
-
-      void run();
-    }, 300); // 300ms delay to ensure transcript is finalized
-
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timeoutId);
-    };
-  }, [transcript, useWebSpeech, isRecording, isProcessing]);
 
   const onSave = async () => {
     if (!patientId) return;
@@ -313,8 +300,11 @@ export default function VitalsCapture() {
               {isProcessing && (
                 <div className="inline-flex items-center gap-2 text-sm text-slate-600">
                   <Loader2 className="h-4 w-4 animate-spin" />
-                  Processing...
+                  {useWebSpeech ? "Extracting vitals..." : "Processing..."}
                 </div>
+              )}
+              {useWebSpeech && isRecording && !isProcessing && (
+                <div className="text-xs text-emerald-600 font-medium">Live transcription active</div>
               )}
             </div>
             <div className="relative">
