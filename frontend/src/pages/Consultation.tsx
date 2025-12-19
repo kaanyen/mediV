@@ -1,4 +1,4 @@
-import { AlertCircle, ClipboardList, Loader2, Mic, Sparkles, Square, TestTubeDiagonal } from "lucide-react";
+import { ClipboardList, Loader2, Mic, Sparkles, Square, TestTubeDiagonal } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import DiagnosisCard, { type Diagnosis } from "../components/DiagnosisCard";
@@ -7,7 +7,6 @@ import VoiceVisualizer from "../components/VoiceVisualizer";
 import { useAudioRecorder } from "../hooks/useAudioRecorder";
 import { getDiagnosis, processAudio } from "../services/api";
 import { getEncounterById, getPatientById, saveInitialDiagnosis, updateEncounterToLab } from "../services/db";
-import { isSpeechRecognitionSupported } from "../utils/speechRecognition";
 import type { Encounter, Patient } from "../types/schema";
 
 function vitalsLabel(v: Encounter["vitals"] | undefined) {
@@ -30,8 +29,7 @@ export default function Consultation() {
   const [patient, setPatient] = useState<Patient | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
 
-  const webSpeechSupported = isSpeechRecognitionSupported();
-  const { isRecording, audioBlob, mediaStream, transcript, interimTranscript, useWebSpeech, startRecording, stopRecording } = useAudioRecorder(true);
+  const { isRecording, audioBlob, mediaStream, startRecording, stopRecording } = useAudioRecorder();
   const [isTranscribing, setIsTranscribing] = useState(false);
 
   const [symptoms, setSymptoms] = useState("");
@@ -74,9 +72,6 @@ export default function Consultation() {
       return;
     }
 
-    // Clear previous symptoms when starting new recording
-    setSymptoms("");
-
     try {
       await startRecording();
     } catch {
@@ -84,21 +79,8 @@ export default function Consultation() {
     }
   };
 
-  // Update symptoms in real-time from Web Speech API
   useEffect(() => {
-    if (useWebSpeech && transcript) {
-      setSymptoms(transcript);
-      // Flash effect when transcript updates
-      setFlashSymptoms(true);
-      if (clearFlashTimeout.current) window.clearTimeout(clearFlashTimeout.current);
-      clearFlashTimeout.current = window.setTimeout(() => setFlashSymptoms(false), 1200);
-    }
-  }, [transcript, useWebSpeech]);
-
-  // Process audio when recording stops (fallback to Whisper only)
-  useEffect(() => {
-    // Only process audio blob if we're NOT using Web Speech (fallback mode)
-    if (useWebSpeech || !audioBlob) return;
+    if (!audioBlob) return;
     let cancelled = false;
 
     const run = async () => {
@@ -128,7 +110,7 @@ export default function Consultation() {
     return () => {
       cancelled = true;
     };
-  }, [audioBlob, useWebSpeech]);
+  }, [audioBlob]);
 
   const onDiagnose = async () => {
     if (!encounter) return;
@@ -229,36 +211,15 @@ export default function Consultation() {
                 </div>
               )}
             </div>
-            <div className="relative">
-              <textarea
-                value={symptoms}
-                onChange={(e) => setSymptoms(e.target.value)}
-                placeholder='Record or type symptoms, e.g. "severe headache, chills, bitter taste"...'
-                className={[
-                  "h-40 w-full resize-none rounded-xl border px-3 py-2 text-sm text-slate-900 outline-none transition",
-                  flashSymptoms ? "border-emerald-500 bg-emerald-50" : "border-slate-200 bg-slate-50"
-                ].join(" ")}
-              />
-              {/* Real-time interim transcript overlay */}
-              {isRecording && interimTranscript && useWebSpeech && (
-                <div className="pointer-events-none absolute inset-0 flex items-start px-3 py-2">
-                  <div className="text-sm italic text-slate-400">
-                    {symptoms}
-                    <span className="text-slate-500">{interimTranscript}</span>
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {!webSpeechSupported && (
-              <div className="mt-3 flex items-start gap-2 rounded-xl bg-amber-50 px-3 py-2 text-sm text-amber-800">
-                <AlertCircle className="h-4 w-4 mt-0.5 flex-shrink-0" />
-                <div>
-                  Web Speech API not supported in this browser. Using Whisper backend for transcription.
-                </div>
-              </div>
-            )}
-
+            <textarea
+              value={symptoms}
+              onChange={(e) => setSymptoms(e.target.value)}
+              placeholder='Record or type symptoms, e.g. "severe headache, chills, bitter taste"...'
+              className={[
+                "h-40 w-full resize-none rounded-xl border px-3 py-2 text-sm text-slate-900 outline-none transition",
+                flashSymptoms ? "border-emerald-500 bg-emerald-50" : "border-slate-200 bg-slate-50"
+              ].join(" ")}
+            />
             {error && <div className="mt-3 rounded-xl bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>}
           </div>
         </div>

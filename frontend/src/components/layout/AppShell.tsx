@@ -32,7 +32,7 @@ function useAiStatus(pollMs = 6000): AiStatus {
     // This prevents CORS errors on Vercel deployments
     const isProduction = window.location.protocol === "https:";
     const isLocalhostApi = API_BASE_URL.includes("localhost") || API_BASE_URL.includes("127.0.0.1");
-    
+
     if (isProduction && isLocalhostApi) {
       if (status !== "disabled") setStatus("disabled");
       return;
@@ -134,7 +134,12 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
             {ai !== "disabled" && (
               <div className="inline-flex items-center gap-2" title="AI Status (GET /health)">
-                <Brain className={["h-4 w-4", ai === "ready" ? "text-emerald-600" : ai === "offline" ? "text-red-600" : "text-slate-400"].join(" ")} />
+                <Brain
+                  className={[
+                    "h-4 w-4",
+                    ai === "ready" ? "text-emerald-600" : ai === "offline" ? "text-red-600" : "text-slate-400"
+                  ].join(" ")}
+                />
                 <span className={ai === "ready" ? "text-emerald-700" : ai === "offline" ? "text-red-700" : "text-slate-500"}>
                   {ai === "ready" ? "AI Ready" : ai === "offline" ? "AI Offline" : "AI Checking"}
                 </span>
@@ -148,3 +153,5 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     </div>
   );
 }
+
+

@@ -356,28 +356,7 @@ def _load_audio_mono_16k(path: Path) -> np.ndarray:
             import librosa  # local import to keep startup errors clear
 
             audio, _sr = librosa.load(str(path), sr=16000, mono=True)
-            audio = audio.astype(np.float32, copy=False)
-            
-            # Audio normalization and quality improvements
-            # Remove silence at start/end (helps with transcription accuracy)
-            if len(audio) > 0:
-                # Normalize audio to prevent clipping while maintaining dynamic range
-                max_val = np.abs(audio).max()
-                if max_val > 0:
-                    # Normalize to 0.95 peak to avoid clipping
-                    audio = audio * (0.95 / max_val)
-            
-            # Validate audio length (too short = noise, too long = may cause issues)
-            min_duration = 0.5  # 0.5 seconds minimum
-            max_duration = 60.0  # 60 seconds maximum
-            duration = len(audio) / 16000.0
-            if duration < min_duration:
-                raise ValueError(f"Audio too short ({duration:.2f}s). Minimum {min_duration}s required.")
-            if duration > max_duration:
-                print(f"[MediVoice] Warning: Audio is {duration:.2f}s, truncating to {max_duration}s")
-                audio = audio[:int(max_duration * 16000)]
-            
-            return audio
+            return audio.astype(np.float32, copy=False)
         except Exception as e:
             # Fallback to soundfile for wav/flac/etc.
             try:
@@ -463,8 +442,6 @@ def _transcribe_with_whisper(audio: np.ndarray, sampling_rate: int = 16000) -> s
     """
     Run Whisper directly (no Transformers pipeline) to avoid torchcodec/FFmpeg runtime issues
     on macOS. Input should be mono float waveform at 16kHz.
-    
-    Uses beam search with repetition penalty for better transcription quality.
     """
     inputs = asr_processor(audio, sampling_rate=sampling_rate, return_tensors="pt")
     input_features = inputs.get("input_features")
@@ -472,17 +449,7 @@ def _transcribe_with_whisper(audio: np.ndarray, sampling_rate: int = 16000) -> s
         raise RuntimeError("Whisper processor did not produce input_features.")
     input_features = input_features.to(DEVICE, dtype=asr_dtype)
 
-    # Improved generation parameters for better transcription quality
-    gen_kwargs: Dict[str, Any] = {
-        "max_new_tokens": 256,  # Increased from 128 for longer utterances
-        "do_sample": False,  # Greedy decoding (deterministic)
-        "num_beams": 5,  # Beam search for better quality
-        "length_penalty": 1.0,  # Slight penalty for longer sequences
-        "repetition_penalty": 1.2,  # Penalize repetition (fixes "one hundred and one hundred" issue)
-        "no_repeat_ngram_size": 3,  # Prevent 3-gram repetition
-        "early_stopping": True,  # Stop when EOS is generated
-    }
-    
+    gen_kwargs: Dict[str, Any] = {"max_new_tokens": 128, "do_sample": False}
     try:
         # Provide a transcribe task prompt when supported.
         forced = asr_processor.get_decoder_prompt_ids(task="transcribe")
@@ -568,10 +535,6 @@ class VitalsResponse(BaseModel):
     vitals: VitalsModel = Field(..., description="Extracted vital signs")
 
 
-class ExtractVitalsRequest(BaseModel):
-    transcription: str = Field(..., description="Transcription text from Web Speech API or other source")
-
-
 class DiagnosisRequest(BaseModel):
     symptoms: str
     vitals: Dict[str, Any]  # {bp, temp, pulse...}
@@ -626,49 +589,6 @@ async def health() -> Dict[str, str]:
     return {"status": "ok"}
 
 
-@app.post("/extract-vitals", response_model=VitalsResponse)
-async def extract_vitals(req: ExtractVitalsRequest) -> VitalsResponse:
-    """
-    Extract vital signs from a transcription text (no audio processing).
-    Used when frontend provides transcription via Web Speech API.
-    """
-    transcript = (req.transcription or "").strip()
-    if not transcript:
-        raise HTTPException(status_code=400, detail="transcription is required")
-
-    print(f"[MediVoice] Extracting vitals from transcription: {transcript}")
-
-    prompt_primary = (
-        "Extract vital signs from this transcript into STRICT JSON with keys: bp, temp, pulse, spo2.\n"
-        "- Use bp format like \"140/90\" when possible.\n"
-        "- temp should be a number in Celsius if present.\n"
-        "- pulse should be a number (bpm) if present.\n"
-        "- spo2 should be a number (percent) if present.\n"
-        "Return ONLY the JSON object (no markdown, no extra text).\n"
-        f"Transcript: {transcript}"
-    )
-
-    completion = _medgemma_generate(prompt_primary)
-    if not completion or not completion.strip():
-        # One retry with a shorter/less strict prompt in case the model is refusing/terminating early
-        prompt_retry = f"Return a JSON object with bp,temp,pulse,spo2 extracted from: {transcript}"
-        completion = _medgemma_generate(prompt_retry)
-
-    try:
-        vitals_raw = _robust_json_extract(completion)
-    except Exception as e:
-        print(f"[MediVoice] Warning: could not parse JSON from MedGemma output. output={completion!r}")
-        # Return transcription but empty vitals rather than crashing the request.
-        vitals_raw = {}
-
-    vitals_norm = _normalize_vitals(vitals_raw)
-
-    return VitalsResponse(
-        transcription=transcript,
-        vitals=VitalsModel(**vitals_norm),
-    )
-
-
 @app.post("/process-audio", response_model=VitalsResponse)
 async def process_audio(file: UploadFile = File(...)) -> VitalsResponse:
     TEMP_DIR.mkdir(parents=True, exist_ok=True)
@@ -697,12 +617,6 @@ async def process_audio(file: UploadFile = File(...)) -> VitalsResponse:
             audio = _load_audio_mono_16k(tmp_path)
         except Exception as e:
             raise HTTPException(status_code=422, detail=str(e))
-
-        # Log audio quality metrics for debugging
-        duration = len(audio) / 16000.0
-        rms = np.sqrt(np.mean(audio**2))
-        peak = np.abs(audio).max()
-        print(f"[MediVoice] Audio: {duration:.2f}s, RMS={rms:.4f}, Peak={peak:.4f}")
 
         transcript = _transcribe_with_whisper(audio, sampling_rate=16000)
 

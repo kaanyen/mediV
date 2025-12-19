@@ -1,13 +1,11 @@
-import { AlertCircle, Loader2, Mic, Save, Square } from "lucide-react";
+import { Loader2, Mic, Save, Square } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import AutoFillInput from "../components/AutoFillInput";
 import VoiceVisualizer from "../components/VoiceVisualizer";
 import { useAudioRecorder } from "../hooks/useAudioRecorder";
-import { extractVitals, processAudio, type VitalsResponse } from "../services/api";
+import { processAudio, type VitalsResponse } from "../services/api";
 import { createEncounter, getPatientById, makeId } from "../services/db";
-import { isSpeechRecognitionSupported } from "../utils/speechRecognition";
-import { extractVitalsFast, hasVitals, type ExtractedVitals } from "../utils/vitalExtraction";
 import type { Encounter, Patient } from "../types/schema";
 
 type VitalsState = {
@@ -27,8 +25,7 @@ export default function VitalsCapture() {
   const [patient, setPatient] = useState<Patient | null>(null);
   const [patientMissing, setPatientMissing] = useState(false);
 
-  const webSpeechSupported = isSpeechRecognitionSupported();
-  const { isRecording, audioBlob, mediaStream, transcript, interimTranscript, useWebSpeech, startRecording, stopRecording } = useAudioRecorder(true);
+  const { isRecording, audioBlob, mediaStream, startRecording, stopRecording } = useAudioRecorder();
 
   const [isProcessing, setIsProcessing] = useState(false);
   const [transcription, setTranscription] = useState("");
@@ -69,13 +66,6 @@ export default function VitalsCapture() {
       return;
     }
 
-    // Clear previous transcription and vitals when starting new recording
-    setTranscription("");
-    setVitals(emptyVitals);
-    setAiFilled({ bp: false, temp: false, pulse: false, spo2: false, weight: false });
-    lastExtractedTranscriptRef.current = ""; // Reset extraction tracking
-    lastFastExtractionRef.current = { bp: null, temp: null, pulse: null, spo2: null }; // Reset fast extraction
-
     try {
       await startRecording();
     } catch {
@@ -83,172 +73,8 @@ export default function VitalsCapture() {
     }
   };
 
-  const extractionTimeoutRef = useRef<number | null>(null);
-  const lastExtractedTranscriptRef = useRef("");
-  const lastFastExtractionRef = useRef<ExtractedVitals>({ bp: null, temp: null, pulse: null, spo2: null });
-
-  // Update transcription display in real-time from Web Speech API
   useEffect(() => {
-    if (transcript) {
-      setTranscription(transcript);
-    }
-  }, [transcript]);
-
-  // Fast client-side extraction (instant, no API call)
-  useEffect(() => {
-    if (!useWebSpeech || !isRecording || !transcript || !transcript.trim()) {
-      return;
-    }
-
-    // Run fast extraction immediately on every transcript update
-    const fastExtracted = extractVitalsFast(transcript);
-    
-    // Only update if we found new vitals that differ from last extraction
-    let hasNewVitals = false;
-    
-    if (fastExtracted.bp && fastExtracted.bp !== lastFastExtractionRef.current.bp) {
-      hasNewVitals = true;
-    }
-    if (fastExtracted.temp && fastExtracted.temp !== lastFastExtractionRef.current.temp) {
-      hasNewVitals = true;
-    }
-    if (fastExtracted.pulse && fastExtracted.pulse !== lastFastExtractionRef.current.pulse) {
-      hasNewVitals = true;
-    }
-    if (fastExtracted.spo2 && fastExtracted.spo2 !== lastFastExtractionRef.current.spo2) {
-      hasNewVitals = true;
-    }
-
-    if (hasNewVitals) {
-      lastFastExtractionRef.current = fastExtracted;
-      
-      // Update vitals using functional update to avoid dependency on vitals state
-      setVitals((prev) => ({
-        ...prev,
-        bp: fastExtracted.bp || prev.bp,
-        temp: fastExtracted.temp || prev.temp,
-        pulse: fastExtracted.pulse || prev.pulse,
-        spo2: fastExtracted.spo2 || prev.spo2,
-        weight: prev.weight
-      }));
-      
-      // Flash the fields that were just filled
-      const nextFilled = {
-        bp: Boolean(fastExtracted.bp),
-        temp: Boolean(fastExtracted.temp),
-        pulse: Boolean(fastExtracted.pulse),
-        spo2: Boolean(fastExtracted.spo2),
-        weight: false
-      };
-      setAiFilled(nextFilled);
-
-      if (clearFlashTimeout.current) window.clearTimeout(clearFlashTimeout.current);
-      clearFlashTimeout.current = window.setTimeout(() => {
-        setAiFilled({ bp: false, temp: false, pulse: false, spo2: false, weight: false });
-      }, 2000);
-    }
-  }, [transcript, useWebSpeech, isRecording]);
-
-  // AI extraction (MedGemma) as fallback for complex cases (debounced)
-  useEffect(() => {
-    // Only extract if using Web Speech and we have a transcript
-    if (!useWebSpeech || !isRecording || !transcript || !transcript.trim()) {
-      return;
-    }
-
-    // Skip if transcript hasn't changed meaningfully
-    const transcriptChanged = transcript.trim() !== lastExtractedTranscriptRef.current.trim();
-    if (!transcriptChanged) {
-      return;
-    }
-
-    // Clear previous timeout
-    if (extractionTimeoutRef.current) {
-      window.clearTimeout(extractionTimeoutRef.current);
-    }
-
-    // Debounce AI extraction: wait 2 seconds after user stops speaking
-    // This is for complex cases that fast extraction might miss
-    extractionTimeoutRef.current = window.setTimeout(() => {
-      const currentTranscript = transcript.trim();
-      if (!currentTranscript || currentTranscript === lastExtractedTranscriptRef.current.trim()) {
-        return;
-      }
-
-      // Skip AI extraction if fast extraction already found all vitals
-      const fastExtracted = extractVitalsFast(currentTranscript);
-      if (hasVitals(fastExtracted)) {
-        // Still do AI extraction to catch any missed vitals or corrections
-        // but don't show processing indicator if fast extraction already worked
-      }
-
-      lastExtractedTranscriptRef.current = currentTranscript;
-      let cancelled = false;
-
-      const run = async () => {
-        setIsProcessing(true);
-        setError(null);
-
-        try {
-          const res: VitalsResponse | null = await extractVitals(currentTranscript);
-          if (cancelled) return;
-
-          if (!res) {
-            // Don't show error for AI extraction failures if fast extraction worked
-            if (!hasVitals(fastExtracted)) {
-              setError("AI Server Disconnected. You can still enter vitals manually.");
-            }
-            return;
-          }
-
-          // Merge AI results with existing vitals (AI can fill gaps or correct)
-          setVitals((prev) => ({
-            bp: res.vitals?.bp || prev.bp,
-            temp: res.vitals?.temp || prev.temp,
-            pulse: res.vitals?.pulse || prev.pulse,
-            spo2: res.vitals?.spo2 || prev.spo2,
-            weight: prev.weight
-          }));
-
-          // Flash fields that were just filled by AI
-          const aiFilled = {
-            bp: Boolean(res.vitals?.bp && !fastExtracted.bp),
-            temp: Boolean(res.vitals?.temp && !fastExtracted.temp),
-            pulse: Boolean(res.vitals?.pulse && !fastExtracted.pulse),
-            spo2: Boolean(res.vitals?.spo2 && !fastExtracted.spo2),
-            weight: false
-          };
-          
-          if (aiFilled.bp || aiFilled.temp || aiFilled.pulse || aiFilled.spo2) {
-            setAiFilled(aiFilled);
-            if (clearFlashTimeout.current) window.clearTimeout(clearFlashTimeout.current);
-            clearFlashTimeout.current = window.setTimeout(() => {
-              setAiFilled({ bp: false, temp: false, pulse: false, spo2: false, weight: false });
-            }, 2000);
-          }
-        } catch {
-          if (cancelled) return;
-          // Don't show error for AI extraction failures
-          console.warn("[VitalsCapture] AI extraction failed");
-        } finally {
-          if (!cancelled) setIsProcessing(false);
-        }
-      };
-
-      void run();
-    }, 2000); // 2 second debounce for AI (longer since fast extraction handles most cases)
-
-    return () => {
-      if (extractionTimeoutRef.current) {
-        window.clearTimeout(extractionTimeoutRef.current);
-      }
-    };
-  }, [transcript, useWebSpeech, isRecording]);
-
-  // Process audio when recording stops (fallback to Whisper only)
-  useEffect(() => {
-    // Only process audio blob if we're NOT using Web Speech (fallback mode)
-    if (useWebSpeech || !audioBlob) return;
+    if (!audioBlob) return;
     let cancelled = false;
 
     const run = async () => {
@@ -298,7 +124,7 @@ export default function VitalsCapture() {
     return () => {
       cancelled = true;
     };
-  }, [audioBlob, useWebSpeech]);
+  }, [audioBlob]);
 
   const onSave = async () => {
     if (!patientId) return;
@@ -371,39 +197,16 @@ export default function VitalsCapture() {
               {isProcessing && (
                 <div className="inline-flex items-center gap-2 text-sm text-slate-600">
                   <Loader2 className="h-4 w-4 animate-spin" />
-                  {useWebSpeech ? "Extracting vitals..." : "Processing..."}
-                </div>
-              )}
-              {useWebSpeech && isRecording && !isProcessing && (
-                <div className="text-xs text-emerald-600 font-medium">Live transcription active</div>
-              )}
-            </div>
-            <div className="relative">
-              <textarea
-                value={transcription}
-                onChange={(e) => setTranscription(e.target.value)}
-                placeholder="Transcription will appear here..."
-                className="h-44 w-full resize-none rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900 outline-none"
-              />
-              {/* Real-time interim transcript overlay */}
-              {isRecording && interimTranscript && (
-                <div className="pointer-events-none absolute inset-0 flex items-start px-3 py-2">
-                  <div className="text-sm italic text-slate-400">
-                    {transcription}
-                    <span className="text-slate-500">{interimTranscript}</span>
-                  </div>
+                  Processing...
                 </div>
               )}
             </div>
-
-            {!webSpeechSupported && (
-              <div className="mt-3 flex items-start gap-2 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">
-                <AlertCircle className="h-4 w-4 mt-0.5 flex-shrink-0" />
-                <div>
-                  Web Speech API not supported in this browser. Using Whisper backend for transcription.
-                </div>
-              </div>
-            )}
+            <textarea
+              value={transcription}
+              onChange={(e) => setTranscription(e.target.value)}
+              placeholder="Transcription will appear here..."
+              className="h-44 w-full resize-none rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900 outline-none"
+            />
 
             {error && <div className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>}
           </div>
