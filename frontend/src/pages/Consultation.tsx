@@ -5,6 +5,7 @@ import DiagnosisCard, { type Diagnosis } from "../components/DiagnosisCard";
 import LabRequestModal from "../components/LabRequestModal";
 import VoiceVisualizer from "../components/VoiceVisualizer";
 import { useAudioRecorder } from "../hooks/useAudioRecorder";
+import { useSpeechRecognition } from "../hooks/useSpeechRecognition";
 import { getDiagnosis, processAudio } from "../services/api";
 import { getEncounterById, getPatientById, saveInitialDiagnosis, updateEncounterToLab } from "../services/db";
 import type { Encounter, Patient } from "../types/schema";
@@ -31,6 +32,17 @@ export default function Consultation() {
 
   const { isRecording, audioBlob, mediaStream, startRecording, stopRecording } = useAudioRecorder();
   const [isTranscribing, setIsTranscribing] = useState(false);
+
+  const {
+    supported: speechSupported,
+    isListening,
+    transcript: liveTranscript,
+    interimTranscript,
+    error: speechError,
+    start: startSpeech,
+    stop: stopSpeech,
+    reset: resetSpeech
+  } = useSpeechRecognition();
 
   const [symptoms, setSymptoms] = useState("");
   const [diagnoses, setDiagnoses] = useState<Diagnosis[] | null>(null);
@@ -65,19 +77,39 @@ export default function Consultation() {
 
   const toggleRecording = async () => {
     setError(null);
+    if (speechError) {
+      resetSpeech();
+    }
     if (!canRecord) return;
 
     if (isRecording) {
       stopRecording();
+      if (speechSupported) {
+        stopSpeech();
+      }
       return;
     }
 
     try {
+      resetSpeech();
+      setSymptoms("");
       await startRecording();
+      if (speechSupported) {
+        startSpeech();
+      }
     } catch {
       setError("Microphone access failed. Please allow microphone permissions in your browser.");
     }
   };
+
+  // While recording, sync textarea with live Web Speech transcript
+  useEffect(() => {
+    if (!isRecording || !speechSupported) return;
+    const combined = [liveTranscript, interimTranscript].filter(Boolean).join(" ").trim();
+    if (combined) {
+      setSymptoms(combined);
+    }
+  }, [isRecording, speechSupported, liveTranscript, interimTranscript]);
 
   useEffect(() => {
     if (!audioBlob) return;
@@ -203,7 +235,16 @@ export default function Consultation() {
 
           <div className="rounded-2xl border border-slate-200 bg-white p-4">
             <div className="mb-2 flex items-center justify-between">
-              <div className="text-sm font-semibold text-slate-700">History of Present Illness / Symptoms</div>
+              <div className="flex flex-col gap-1">
+                <div className="text-sm font-semibold text-slate-700">History of Present Illness / Symptoms</div>
+                <div className="text-xs text-slate-600">
+                  {speechSupported
+                    ? isListening
+                      ? "Live transcription (Web Speech) is capturing as you speak..."
+                      : "Click record to start live transcription, or type symptoms manually."
+                    : "Your browser does not support live speech recognition; audio will be transcribed after recording."}
+                </div>
+              </div>
               {(isTranscribing || isDiagnosing) && (
                 <div className="inline-flex items-center gap-2 text-sm text-slate-600">
                   <Loader2 className="h-4 w-4 animate-spin" />
@@ -221,6 +262,11 @@ export default function Consultation() {
               ].join(" ")}
             />
             {error && <div className="mt-3 rounded-xl bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>}
+            {speechError && (
+              <div className="mt-2 rounded-xl bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                Live transcription issue: {speechError}. You can still rely on backend transcription or type manually.
+              </div>
+            )}
           </div>
         </div>
 

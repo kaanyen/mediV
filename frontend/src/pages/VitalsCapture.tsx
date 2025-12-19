@@ -4,6 +4,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import AutoFillInput from "../components/AutoFillInput";
 import VoiceVisualizer from "../components/VoiceVisualizer";
 import { useAudioRecorder } from "../hooks/useAudioRecorder";
+import { useSpeechRecognition } from "../hooks/useSpeechRecognition";
 import { processAudio, type VitalsResponse } from "../services/api";
 import { createEncounter, getPatientById, makeId } from "../services/db";
 import type { Encounter, Patient } from "../types/schema";
@@ -26,6 +27,17 @@ export default function VitalsCapture() {
   const [patientMissing, setPatientMissing] = useState(false);
 
   const { isRecording, audioBlob, mediaStream, startRecording, stopRecording } = useAudioRecorder();
+
+  const {
+    supported: speechSupported,
+    isListening,
+    transcript: liveTranscript,
+    interimTranscript,
+    error: speechError,
+    start: startSpeech,
+    stop: stopSpeech,
+    reset: resetSpeech
+  } = useSpeechRecognition();
 
   const [isProcessing, setIsProcessing] = useState(false);
   const [transcription, setTranscription] = useState("");
@@ -59,19 +71,41 @@ export default function VitalsCapture() {
 
   const toggleRecording = async () => {
     setError(null);
+    if (speechError) {
+      // Clear previous speech errors when retrying
+      resetSpeech();
+    }
     if (!canRecord) return;
 
     if (isRecording) {
       stopRecording();
+      if (speechSupported) {
+        stopSpeech();
+      }
       return;
     }
 
     try {
+      // Fresh live transcription for this recording
+      resetSpeech();
+      setTranscription("");
       await startRecording();
+      if (speechSupported) {
+        startSpeech();
+      }
     } catch {
       setError("Microphone access failed. Please allow microphone permissions in your browser.");
     }
   };
+
+  // While recording, keep the textarea in sync with live Web Speech transcript
+  useEffect(() => {
+    if (!isRecording || !speechSupported) return;
+    const combined = [liveTranscript, interimTranscript].filter(Boolean).join(" ").trim();
+    if (combined) {
+      setTranscription(combined);
+    }
+  }, [isRecording, speechSupported, liveTranscript, interimTranscript]);
 
   useEffect(() => {
     if (!audioBlob) return;
@@ -194,6 +228,13 @@ export default function VitalsCapture() {
           <div className="rounded-xl border border-slate-200 bg-white p-4">
             <div className="mb-2 flex items-center justify-between">
               <div className="text-sm font-semibold text-slate-700">Raw Transcription</div>
+              <div className="flex items-center gap-3 text-xs text-slate-600">
+                {speechSupported ? (
+                  <span>{isListening ? "Live transcription (Web Speech) active..." : "Click record to start live transcription"}</span>
+                ) : (
+                  <span>Your browser does not support live speech recognition. Audio will be processed after recording.</span>
+                )}
+              </div>
               {isProcessing && (
                 <div className="inline-flex items-center gap-2 text-sm text-slate-600">
                   <Loader2 className="h-4 w-4 animate-spin" />
@@ -209,6 +250,11 @@ export default function VitalsCapture() {
             />
 
             {error && <div className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>}
+            {speechError && (
+              <div className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                Live transcription issue: {speechError}. You can still rely on backend transcription or type manually.
+              </div>
+            )}
           </div>
         </div>
 
