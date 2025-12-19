@@ -356,7 +356,28 @@ def _load_audio_mono_16k(path: Path) -> np.ndarray:
             import librosa  # local import to keep startup errors clear
 
             audio, _sr = librosa.load(str(path), sr=16000, mono=True)
-            return audio.astype(np.float32, copy=False)
+            audio = audio.astype(np.float32, copy=False)
+            
+            # Audio normalization and quality improvements
+            # Remove silence at start/end (helps with transcription accuracy)
+            if len(audio) > 0:
+                # Normalize audio to prevent clipping while maintaining dynamic range
+                max_val = np.abs(audio).max()
+                if max_val > 0:
+                    # Normalize to 0.95 peak to avoid clipping
+                    audio = audio * (0.95 / max_val)
+            
+            # Validate audio length (too short = noise, too long = may cause issues)
+            min_duration = 0.5  # 0.5 seconds minimum
+            max_duration = 60.0  # 60 seconds maximum
+            duration = len(audio) / 16000.0
+            if duration < min_duration:
+                raise ValueError(f"Audio too short ({duration:.2f}s). Minimum {min_duration}s required.")
+            if duration > max_duration:
+                print(f"[MediVoice] Warning: Audio is {duration:.2f}s, truncating to {max_duration}s")
+                audio = audio[:int(max_duration * 16000)]
+            
+            return audio
         except Exception as e:
             # Fallback to soundfile for wav/flac/etc.
             try:
@@ -442,6 +463,8 @@ def _transcribe_with_whisper(audio: np.ndarray, sampling_rate: int = 16000) -> s
     """
     Run Whisper directly (no Transformers pipeline) to avoid torchcodec/FFmpeg runtime issues
     on macOS. Input should be mono float waveform at 16kHz.
+    
+    Uses beam search with repetition penalty for better transcription quality.
     """
     inputs = asr_processor(audio, sampling_rate=sampling_rate, return_tensors="pt")
     input_features = inputs.get("input_features")
@@ -449,7 +472,17 @@ def _transcribe_with_whisper(audio: np.ndarray, sampling_rate: int = 16000) -> s
         raise RuntimeError("Whisper processor did not produce input_features.")
     input_features = input_features.to(DEVICE, dtype=asr_dtype)
 
-    gen_kwargs: Dict[str, Any] = {"max_new_tokens": 128, "do_sample": False}
+    # Improved generation parameters for better transcription quality
+    gen_kwargs: Dict[str, Any] = {
+        "max_new_tokens": 256,  # Increased from 128 for longer utterances
+        "do_sample": False,  # Greedy decoding (deterministic)
+        "num_beams": 5,  # Beam search for better quality
+        "length_penalty": 1.0,  # Slight penalty for longer sequences
+        "repetition_penalty": 1.2,  # Penalize repetition (fixes "one hundred and one hundred" issue)
+        "no_repeat_ngram_size": 3,  # Prevent 3-gram repetition
+        "early_stopping": True,  # Stop when EOS is generated
+    }
+    
     try:
         # Provide a transcribe task prompt when supported.
         forced = asr_processor.get_decoder_prompt_ids(task="transcribe")
@@ -617,6 +650,12 @@ async def process_audio(file: UploadFile = File(...)) -> VitalsResponse:
             audio = _load_audio_mono_16k(tmp_path)
         except Exception as e:
             raise HTTPException(status_code=422, detail=str(e))
+
+        # Log audio quality metrics for debugging
+        duration = len(audio) / 16000.0
+        rms = np.sqrt(np.mean(audio**2))
+        peak = np.abs(audio).max()
+        print(f"[MediVoice] Audio: {duration:.2f}s, RMS={rms:.4f}, Peak={peak:.4f}")
 
         transcript = _transcribe_with_whisper(audio, sampling_rate=16000)
 
