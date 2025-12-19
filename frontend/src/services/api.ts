@@ -43,9 +43,10 @@ export type ConfirmDiagnosisResponse = {
 // Use environment variable for API URL, fallback to localhost for development
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
 
-// Debug log (always log on mobile for troubleshooting)
-console.log("[MediVoice] API Base URL:", API_BASE_URL);
-console.log("[MediVoice] User Agent:", navigator.userAgent);
+// Debug log (only in development)
+if (import.meta.env.DEV) {
+  console.log("[MediVoice] API Base URL:", API_BASE_URL);
+}
 
 const api = axios.create({
   baseURL: API_BASE_URL,
@@ -69,33 +70,9 @@ function toastAiDisconnectedOnce() {
   });
 }
 
-api.interceptors.request.use(
-  (config) => {
-    // Log all requests for debugging (especially on mobile)
-    console.log("[MediVoice] API Request:", config.method?.toUpperCase(), config.url);
-    const fullUrl = (config.baseURL || "") + (config.url || "");
-    console.log("[MediVoice] Full URL:", fullUrl);
-    return config;
-  },
-  (error) => {
-    console.error("[MediVoice] Request interceptor error:", error);
-    return Promise.reject(error);
-  }
-);
-
 api.interceptors.response.use(
-  (resp) => {
-    console.log("[MediVoice] API Response:", resp.status, resp.config.url);
-    return resp;
-  },
+  (resp) => resp,
   (err: AxiosError) => {
-    console.error("[MediVoice] API Error:", {
-      url: err.config?.url,
-      method: err.config?.method,
-      status: err.response?.status,
-      code: err.code,
-      message: err.message,
-    });
     const isNetwork = err.code === "ERR_NETWORK" || (typeof err.message === "string" && /network/i.test(err.message));
     const status = err.response?.status;
     if (isNetwork || (status && status >= 500)) {
@@ -109,28 +86,16 @@ export async function processAudio(audioBlob: Blob): Promise<VitalsResponse | nu
   const formData = new FormData();
   formData.append("file", audioBlob, "audio.webm");
 
-  const url = `${API_BASE_URL}/process-audio`;
-  console.log("[MediVoice] Sending audio to:", url);
-  console.log("[MediVoice] Audio blob size:", audioBlob.size, "bytes");
-
   try {
     const res = await api.post<VitalsResponse>("/process-audio", formData, {
       headers: { 
         "Content-Type": "multipart/form-data",
         "ngrok-skip-browser-warning": "true", // Explicitly include for multipart requests
-      },
-      timeout: 60000, // 60 second timeout for audio processing
+      }
     });
-    console.log("[MediVoice] Audio processing success:", res.status);
     return res.data;
-  } catch (err: any) {
+  } catch (err) {
     console.error("[MediVoice] Audio processing failed:", err);
-    console.error("[MediVoice] Error details:", {
-      message: err.message,
-      code: err.code,
-      response: err.response?.status,
-      responseData: err.response?.data,
-    });
     return null;
   }
 }
