@@ -7,6 +7,7 @@ import { useAudioRecorder } from "../hooks/useAudioRecorder";
 import { extractVitals, processAudio, type VitalsResponse } from "../services/api";
 import { createEncounter, getPatientById, makeId } from "../services/db";
 import { isSpeechRecognitionSupported } from "../utils/speechRecognition";
+import { extractVitalsFast, hasVitals, type ExtractedVitals } from "../utils/vitalExtraction";
 import type { Encounter, Patient } from "../types/schema";
 
 type VitalsState = {
@@ -73,6 +74,7 @@ export default function VitalsCapture() {
     setVitals(emptyVitals);
     setAiFilled({ bp: false, temp: false, pulse: false, spo2: false, weight: false });
     lastExtractedTranscriptRef.current = ""; // Reset extraction tracking
+    lastFastExtractionRef.current = { bp: null, temp: null, pulse: null, spo2: null }; // Reset fast extraction
 
     try {
       await startRecording();
@@ -83,6 +85,7 @@ export default function VitalsCapture() {
 
   const extractionTimeoutRef = useRef<number | null>(null);
   const lastExtractedTranscriptRef = useRef("");
+  const lastFastExtractionRef = useRef<ExtractedVitals>({ bp: null, temp: null, pulse: null, spo2: null });
 
   // Update transcription display in real-time from Web Speech API
   useEffect(() => {
@@ -91,14 +94,69 @@ export default function VitalsCapture() {
     }
   }, [transcript]);
 
-  // Real-time vital extraction from Web Speech API (debounced)
+  // Fast client-side extraction (instant, no API call)
+  useEffect(() => {
+    if (!useWebSpeech || !isRecording || !transcript || !transcript.trim()) {
+      return;
+    }
+
+    // Run fast extraction immediately on every transcript update
+    const fastExtracted = extractVitalsFast(transcript);
+    
+    // Only update if we found new vitals that differ from last extraction
+    let hasNewVitals = false;
+    
+    if (fastExtracted.bp && fastExtracted.bp !== lastFastExtractionRef.current.bp) {
+      hasNewVitals = true;
+    }
+    if (fastExtracted.temp && fastExtracted.temp !== lastFastExtractionRef.current.temp) {
+      hasNewVitals = true;
+    }
+    if (fastExtracted.pulse && fastExtracted.pulse !== lastFastExtractionRef.current.pulse) {
+      hasNewVitals = true;
+    }
+    if (fastExtracted.spo2 && fastExtracted.spo2 !== lastFastExtractionRef.current.spo2) {
+      hasNewVitals = true;
+    }
+
+    if (hasNewVitals) {
+      lastFastExtractionRef.current = fastExtracted;
+      
+      // Update vitals using functional update to avoid dependency on vitals state
+      setVitals((prev) => ({
+        ...prev,
+        bp: fastExtracted.bp || prev.bp,
+        temp: fastExtracted.temp || prev.temp,
+        pulse: fastExtracted.pulse || prev.pulse,
+        spo2: fastExtracted.spo2 || prev.spo2,
+        weight: prev.weight
+      }));
+      
+      // Flash the fields that were just filled
+      const nextFilled = {
+        bp: Boolean(fastExtracted.bp),
+        temp: Boolean(fastExtracted.temp),
+        pulse: Boolean(fastExtracted.pulse),
+        spo2: Boolean(fastExtracted.spo2),
+        weight: false
+      };
+      setAiFilled(nextFilled);
+
+      if (clearFlashTimeout.current) window.clearTimeout(clearFlashTimeout.current);
+      clearFlashTimeout.current = window.setTimeout(() => {
+        setAiFilled({ bp: false, temp: false, pulse: false, spo2: false, weight: false });
+      }, 2000);
+    }
+  }, [transcript, useWebSpeech, isRecording]);
+
+  // AI extraction (MedGemma) as fallback for complex cases (debounced)
   useEffect(() => {
     // Only extract if using Web Speech and we have a transcript
     if (!useWebSpeech || !isRecording || !transcript || !transcript.trim()) {
       return;
     }
 
-    // Skip if transcript hasn't changed meaningfully (avoid duplicate extractions)
+    // Skip if transcript hasn't changed meaningfully
     const transcriptChanged = transcript.trim() !== lastExtractedTranscriptRef.current.trim();
     if (!transcriptChanged) {
       return;
@@ -109,11 +167,19 @@ export default function VitalsCapture() {
       window.clearTimeout(extractionTimeoutRef.current);
     }
 
-    // Debounce extraction: wait 1.5 seconds after user stops speaking
+    // Debounce AI extraction: wait 2 seconds after user stops speaking
+    // This is for complex cases that fast extraction might miss
     extractionTimeoutRef.current = window.setTimeout(() => {
       const currentTranscript = transcript.trim();
       if (!currentTranscript || currentTranscript === lastExtractedTranscriptRef.current.trim()) {
         return;
+      }
+
+      // Skip AI extraction if fast extraction already found all vitals
+      const fastExtracted = extractVitalsFast(currentTranscript);
+      if (hasVitals(fastExtracted)) {
+        // Still do AI extraction to catch any missed vitals or corrections
+        // but don't show processing indicator if fast extraction already worked
       }
 
       lastExtractedTranscriptRef.current = currentTranscript;
@@ -128,11 +194,14 @@ export default function VitalsCapture() {
           if (cancelled) return;
 
           if (!res) {
-            setError("AI Server Disconnected. You can still enter vitals manually.");
+            // Don't show error for AI extraction failures if fast extraction worked
+            if (!hasVitals(fastExtracted)) {
+              setError("AI Server Disconnected. You can still enter vitals manually.");
+            }
             return;
           }
 
-          // Only update vitals if we got new values (merge strategy)
+          // Merge AI results with existing vitals (AI can fill gaps or correct)
           setVitals((prev) => ({
             bp: res.vitals?.bp || prev.bp,
             temp: res.vitals?.temp || prev.temp,
@@ -141,31 +210,33 @@ export default function VitalsCapture() {
             weight: prev.weight
           }));
 
-          // Flash fields that were just filled
-          const nextFilled = {
-            bp: Boolean(res.vitals?.bp),
-            temp: Boolean(res.vitals?.temp),
-            pulse: Boolean(res.vitals?.pulse),
-            spo2: Boolean(res.vitals?.spo2),
+          // Flash fields that were just filled by AI
+          const aiFilled = {
+            bp: Boolean(res.vitals?.bp && !fastExtracted.bp),
+            temp: Boolean(res.vitals?.temp && !fastExtracted.temp),
+            pulse: Boolean(res.vitals?.pulse && !fastExtracted.pulse),
+            spo2: Boolean(res.vitals?.spo2 && !fastExtracted.spo2),
             weight: false
           };
-          setAiFilled(nextFilled);
-
-          if (clearFlashTimeout.current) window.clearTimeout(clearFlashTimeout.current);
-          clearFlashTimeout.current = window.setTimeout(() => {
-            setAiFilled({ bp: false, temp: false, pulse: false, spo2: false, weight: false });
-          }, 2000);
+          
+          if (aiFilled.bp || aiFilled.temp || aiFilled.pulse || aiFilled.spo2) {
+            setAiFilled(aiFilled);
+            if (clearFlashTimeout.current) window.clearTimeout(clearFlashTimeout.current);
+            clearFlashTimeout.current = window.setTimeout(() => {
+              setAiFilled({ bp: false, temp: false, pulse: false, spo2: false, weight: false });
+            }, 2000);
+          }
         } catch {
           if (cancelled) return;
-          // Don't show error for real-time extraction failures, just log
-          console.warn("[VitalsCapture] Real-time extraction failed");
+          // Don't show error for AI extraction failures
+          console.warn("[VitalsCapture] AI extraction failed");
         } finally {
           if (!cancelled) setIsProcessing(false);
         }
       };
 
       void run();
-    }, 1500); // 1.5 second debounce
+    }, 2000); // 2 second debounce for AI (longer since fast extraction handles most cases)
 
     return () => {
       if (extractionTimeoutRef.current) {
