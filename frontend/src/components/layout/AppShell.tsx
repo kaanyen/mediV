@@ -2,6 +2,7 @@ import { Brain, Database, Wifi, WifiOff } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { toast } from "../ui/toaster";
+import AccessibilityWidget from "../shared/AccessibilityWidget";
 
 function useOnlineStatus(): boolean {
   const [online, setOnline] = useState(() => navigator.onLine);
@@ -150,6 +151,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       </div>
 
       {children}
+      <AccessibilityWidget />
     </div>
   );
 }
