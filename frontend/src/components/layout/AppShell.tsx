@@ -21,7 +21,7 @@ function useOnlineStatus(): boolean {
 type AiStatus = "checking" | "ready" | "offline" | "disabled";
 
 // Get API base URL from environment, same as api.ts
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
+const API_BASE_URL = "https://subcollegiate-mamie-superbrave.ngrok-free.dev";
 
 function useAiStatus(pollMs = 6000): AiStatus {
   const [status, setStatus] = useState<AiStatus>("checking");
@@ -47,17 +47,19 @@ function useAiStatus(pollMs = 6000): AiStatus {
         return;
       }
       try {
-        const res = await fetch(`${API_BASE_URL}/health`, {
-          method: "GET",
-          headers: {
-            "ngrok-skip-browser-warning": "true", // Bypass ngrok warning page
-          },
-        });
+        const res = await fetch(`${API_BASE_URL}/health`, { method: "GET" });
         if (!cancelled) setStatus(res.ok ? "ready" : "offline");
-      } catch (err) {
+      } catch {
         if (!cancelled) setStatus("offline");
-        // Don't show toast on every health check failure - only show on actual API calls
-        // The toast is handled by api.ts interceptors
+        const now = Date.now();
+        if (now - lastToastAt > 7000) {
+          lastToastAt = now;
+          toast({
+            type: "error",
+            title: "AI Server Offline",
+            message: "Python backend is unreachable. You can continue with manual entry."
+          });
+        }
       }
     }
 

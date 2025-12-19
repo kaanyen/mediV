@@ -40,13 +40,13 @@ export type ConfirmDiagnosisResponse = {
   analysis: string;
 };
 
-// Use environment variable for API URL, fallback to localhost for development
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
+const API_BASE_URL = "https://subcollegiate-mamie-superbrave.ngrok-free.dev";
 
 // Debug log (only in development)
 if (import.meta.env.DEV) {
   console.log("[MediVoice] API Base URL:", API_BASE_URL);
 }
+
 
 const api = axios.create({
   baseURL: API_BASE_URL,
