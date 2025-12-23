@@ -3,7 +3,12 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 import AccessibilityWidget from "../shared/AccessibilityWidget";
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
+let API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
+
+// Fix missing protocol - if URL doesn't start with http:// or https://, add https://
+if (API_BASE_URL && !API_BASE_URL.startsWith("http://") && !API_BASE_URL.startsWith("https://")) {
+  API_BASE_URL = `https://${API_BASE_URL}`;
+}
 
 function useOnlineStatus(): boolean {
   const [online, setOnline] = useState(navigator.onLine);

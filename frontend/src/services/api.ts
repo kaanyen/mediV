@@ -42,7 +42,13 @@ export type ConfirmDiagnosisResponse = {
   analysis: string;
 };
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
+let API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
+
+// Fix missing protocol - if URL doesn't start with http:// or https://, add https://
+if (API_BASE_URL && !API_BASE_URL.startsWith("http://") && !API_BASE_URL.startsWith("https://")) {
+  console.warn("[MediVoice] ⚠️ API_BASE_URL missing protocol, adding https://");
+  API_BASE_URL = `https://${API_BASE_URL}`;
+}
 
 // Debug log (always log to help debug production issues)
 console.log("[MediVoice] API Base URL:", API_BASE_URL);
