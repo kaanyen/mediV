@@ -104,7 +104,12 @@ export default function PostLabConsult() {
   const onPrescribe = async (prescriptions: PrescriptionItem[]) => {
     if (!id) return;
     const prescriptionsWithTimestamp: Prescription[] = prescriptions.map(p => ({
-      ...p,
+      medication: p.medication,
+      dosage: p.dosage,
+      frequency: p.frequency,
+      duration: p.duration,
+      instructions: p.instructions ?? undefined,
+      warnings: p.warnings ?? undefined,
       prescribedAt: new Date().toISOString(),
       dispensed: false
     }));
