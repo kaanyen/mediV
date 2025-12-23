@@ -108,7 +108,7 @@ export default function Pharmacy() {
       const items: Record<string, DispensedItem> = {};
       selectedEncounter.prescriptions.forEach((pres) => {
         const drug = findDrugByName(pres.medication);
-        const available = drug && drug.stock > 0;
+        const available = !!(drug && drug.stock > 0);
         items[pres.medication] = {
           medication: pres.medication,
           quantity: 1, // Default quantity

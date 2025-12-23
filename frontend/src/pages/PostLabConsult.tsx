@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import DiagnosisCard, { type Diagnosis } from "../components/DiagnosisCard";
 import PrescriptionModal from "../components/PrescriptionModal";
-import { confirmDiagnosis } from "../services/api";
+import { confirmDiagnosis, type PrescriptionItem } from "../services/api";
 import { admitEncounter, dischargeEncounter, getEncounterById, getPatientById, sendToPharmacy } from "../services/db";
 import type { Encounter, Patient, Prescription } from "../types/schema";
 
@@ -101,7 +101,7 @@ export default function PostLabConsult() {
     navigate("/doctor");
   };
 
-  const onPrescribe = async (prescriptions: Prescription[]) => {
+  const onPrescribe = async (prescriptions: PrescriptionItem[]) => {
     if (!id) return;
     const prescriptionsWithTimestamp: Prescription[] = prescriptions.map(p => ({
       ...p,

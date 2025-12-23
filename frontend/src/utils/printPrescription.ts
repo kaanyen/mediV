@@ -218,7 +218,7 @@ export function printPrescriptionPdf(opts: PrintOptions) {
 
       // Instructions box (left side) - styled with light blue background
       if (hasInstructions) {
-        const instructionsText = p.instructions.trim();
+        const instructionsText = (p.instructions || "").trim();
         const wrapped = doc.splitTextToSize(instructionsText, boxWidth - 8);
         const actualHeight = Math.max(25, wrapped.length * 4 + 10);
 
@@ -243,7 +243,7 @@ export function printPrescriptionPdf(opts: PrintOptions) {
         // Update currentY for warnings if they exist
         if (hasWarnings) {
           // Warnings box (right side) - styled with light red background
-          const warningsText = p.warnings.trim();
+          const warningsText = (p.warnings || "").trim();
           const wrappedWarn = doc.splitTextToSize(warningsText, boxWidth - 8);
           const warnHeight = Math.max(25, wrappedWarn.length * 4 + 10);
           const maxHeight = Math.max(actualHeight, warnHeight);
@@ -271,7 +271,7 @@ export function printPrescriptionPdf(opts: PrintOptions) {
         }
       } else if (hasWarnings) {
         // Only warnings, center it or use full width
-        const warningsText = p.warnings.trim();
+        const warningsText = (p.warnings || "").trim();
         const wrappedWarn = doc.splitTextToSize(warningsText, 180);
         const warnHeight = wrappedWarn.length * 4 + 10;
 
