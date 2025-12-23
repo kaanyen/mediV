@@ -1567,8 +1567,9 @@ app.add_middleware(
     # In production, you should restrict this to specific domains.
     allow_origins=["*"],
     allow_credentials=False,  # Must be False when allow_origins=["*"]
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
+    expose_headers=["*"],
 )
 
 @app.get("/")
@@ -1585,6 +1586,10 @@ async def root() -> Dict[str, str]:
 async def health() -> Dict[str, str]:
     return {"status": "ok"}
 
+@app.options("/{full_path:path}")
+async def options_handler(full_path: str):
+    """Handle CORS preflight requests for all routes"""
+    return {"status": "ok"}
 
 @app.post("/process-audio", response_model=VitalsResponse)
 async def process_audio(req: VitalsRequest) -> VitalsResponse:
@@ -1858,6 +1863,8 @@ async def search_drugs(q: str = "") -> DrugListResponse:
     return DrugListResponse(drugs=filtered)
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    # Railway provides PORT environment variable, default to 8000 for local dev
+    port = int(os.getenv("PORT", "8000"))
+    uvicorn.run(app, host="0.0.0.0", port=port)
 
 

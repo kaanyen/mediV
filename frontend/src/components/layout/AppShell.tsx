@@ -43,6 +43,10 @@ function useAiStatus(): AiStatus {
         const url = `${API_BASE_URL}/health`;
         const res = await fetch(url, {
           method: "GET",
+          mode: "cors",
+          headers: {
+            "Accept": "application/json",
+          },
         });
         if (cancelled) return;
         setStatus(res.ok ? "ready" : "offline");
