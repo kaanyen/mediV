@@ -44,9 +44,12 @@ export type ConfirmDiagnosisResponse = {
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
 
-// Debug log (only in development)
-if (import.meta.env.DEV) {
-  console.log("[MediVoice] API Base URL:", API_BASE_URL);
+// Debug log (always log to help debug production issues)
+console.log("[MediVoice] API Base URL:", API_BASE_URL);
+if (!API_BASE_URL || API_BASE_URL.includes("vercel.app") || API_BASE_URL === window.location.origin) {
+  console.error("[MediVoice] ⚠️ ERROR: API_BASE_URL is pointing to frontend instead of backend!");
+  console.error("[MediVoice] Current URL:", API_BASE_URL);
+  console.error("[MediVoice] It should point to your Railway backend URL (e.g., https://your-app.up.railway.app)");
 }
 
 const api = axios.create({
@@ -181,9 +184,16 @@ export async function listDrugs(): Promise<DrugListResponse | null> {
   try {
     const res = await api.get<DrugListResponse>("/drugs");
     console.log("[API] listDrugs response:", res.data);
+    // Check if we got HTML instead of JSON (wrong URL)
+    if (typeof res.data === 'string' || (res.data && typeof res.data === 'object' && !res.data.drugs)) {
+      console.error("[API] Got HTML response instead of JSON. API_BASE_URL might be wrong:", API_BASE_URL);
+      console.error("[API] Response was:", typeof res.data === 'string' ? res.data.substring(0, 200) : res.data);
+      return null;
+    }
     return res.data;
   } catch (error) {
     console.error("[API] Error fetching drugs:", error);
+    console.error("[API] API_BASE_URL is:", API_BASE_URL);
     return null;
   }
 }
