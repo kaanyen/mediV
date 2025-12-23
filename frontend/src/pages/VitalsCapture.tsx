@@ -3,9 +3,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import AutoFillInput from "../components/AutoFillInput";
 import VoiceVisualizer from "../components/VoiceVisualizer";
-import { useAudioRecorder } from "../hooks/useAudioRecorder";
 import { useSpeechRecognition } from "../hooks/useSpeechRecognition";
-import { processAudio, type VitalsResponse } from "../services/api";
+import { processTranscription, type VitalsResponse } from "../services/api";
 import { createEncounter, getPatientById, makeId } from "../services/db";
 import type { Encounter, Patient } from "../types/schema";
 
@@ -26,17 +25,14 @@ export default function VitalsCapture() {
   const [patient, setPatient] = useState<Patient | null>(null);
   const [patientMissing, setPatientMissing] = useState(false);
 
-  const { isRecording, audioBlob, mediaStream, startRecording, stopRecording } = useAudioRecorder();
-
   const {
-    supported: speechSupported,
-    isListening,
-    transcript: liveTranscript,
+    transcript,
     interimTranscript,
+    isListening,
     error: speechError,
-    start: startSpeech,
-    stop: stopSpeech,
-    reset: resetSpeech
+    startListening,
+    stopListening,
+    resetTranscript,
   } = useSpeechRecognition();
 
   const [isProcessing, setIsProcessing] = useState(false);
@@ -50,12 +46,15 @@ export default function VitalsCapture() {
     weight: false
   });
   const [error, setError] = useState<string | null>(null);
-  const [transcriptionMode, setTranscriptionMode] = useState<"live" | "backend">(
-    speechSupported ? "live" : "backend"
-  );
 
   const clearFlashTimeout = useRef<number | null>(null);
+  const processingTimeoutRef = useRef<number | null>(null);
   const canRecord = useMemo(() => !isProcessing, [isProcessing]);
+
+  // Update transcription display with live results
+  useEffect(() => {
+    setTranscription(transcript + (interimTranscript ? ` ${interimTranscript}` : ""));
+  }, [transcript, interimTranscript]);
 
   useEffect(() => {
     const run = async () => {
@@ -72,72 +71,48 @@ export default function VitalsCapture() {
     void run();
   }, [patientId]);
 
-  const toggleRecording = async () => {
+  const toggleRecording = () => {
     setError(null);
-    if (speechError) {
-      // Clear previous speech errors when retrying
-      resetSpeech();
-    }
-    if (!canRecord) return;
-
-    if (isRecording) {
-      stopRecording();
-      if (speechSupported && transcriptionMode === "live") {
-        stopSpeech();
+    if (isListening) {
+      stopListening();
+      // Process final transcript when stopping
+      if (transcript.trim()) {
+        processVitalsFromTranscript(transcript);
       }
-      return;
-    }
-
-    try {
-      // Fresh live transcription for this recording
-      resetSpeech();
-      setTranscription("");
-      await startRecording();
-      if (speechSupported && transcriptionMode === "live") {
-        startSpeech();
-      }
-    } catch {
-      setError("Microphone access failed. Please allow microphone permissions in your browser.");
+    } else {
+      resetTranscript();
+      startListening();
     }
   };
 
-  // While recording, keep the textarea in sync with live Web Speech transcript (only in live mode)
-  useEffect(() => {
-    if (!isRecording || !speechSupported || transcriptionMode !== "live") return;
-    const combined = [liveTranscript, interimTranscript].filter(Boolean).join(" ").trim();
-    if (combined) {
-      setTranscription(combined);
+  // Process vitals extraction from transcript (debounced)
+  const processVitalsFromTranscript = async (text: string) => {
+    if (!text.trim()) return;
+
+    // Clear previous timeout
+    if (processingTimeoutRef.current) {
+      window.clearTimeout(processingTimeoutRef.current);
     }
-  }, [isRecording, speechSupported, transcriptionMode, liveTranscript, interimTranscript]);
 
-  useEffect(() => {
-    if (!audioBlob) return;
-    let cancelled = false;
-
-    const run = async () => {
+    // Debounce: wait 1 second after user stops speaking
+    processingTimeoutRef.current = window.setTimeout(async () => {
       setIsProcessing(true);
       setError(null);
 
       try {
-        const res: VitalsResponse | null = await processAudio(audioBlob);
-        if (cancelled) return;
-
+        const res: VitalsResponse | null = await processTranscription(text);
         if (!res) {
           setError("AI Server Disconnected. You can still enter vitals manually.");
           return;
         }
 
-        // In backend mode, replace transcription. In live mode, keep live transcript but update vitals
-        if (transcriptionMode === "backend") {
-          setTranscription(res.transcription ?? "");
-        }
-        
         setVitals((prev) => ({
           ...prev,
-          bp: res.vitals?.bp ?? "",
-          temp: res.vitals?.temp ?? "",
-          pulse: res.vitals?.pulse ?? "",
-          spo2: res.vitals?.spo2 ?? ""
+          bp: res.vitals?.bp ?? prev.bp ?? "",
+          temp: res.vitals?.temp ?? prev.temp ?? "",
+          pulse: res.vitals?.pulse ?? prev.pulse ?? "",
+          spo2: res.vitals?.spo2 ?? prev.spo2 ?? "",
+          weight: res.vitals?.weight ?? prev.weight ?? ""
         }));
 
         const nextFilled = {
@@ -145,7 +120,7 @@ export default function VitalsCapture() {
           temp: Boolean(res.vitals?.temp),
           pulse: Boolean(res.vitals?.pulse),
           spo2: Boolean(res.vitals?.spo2),
-          weight: false
+          weight: Boolean(res.vitals?.weight)
         };
         setAiFilled(nextFilled);
 
@@ -154,18 +129,26 @@ export default function VitalsCapture() {
           setAiFilled({ bp: false, temp: false, pulse: false, spo2: false, weight: false });
         }, 2000);
       } catch {
-        if (cancelled) return;
         setError("Processing failed. You can still enter vitals manually.");
       } finally {
-        if (!cancelled) setIsProcessing(false);
+        setIsProcessing(false);
       }
-    };
+    }, 1000);
+  };
 
-    void run();
-    return () => {
-      cancelled = true;
-    };
-  }, [audioBlob, transcriptionMode]);
+  // Process transcript in real-time as user speaks (debounced)
+  useEffect(() => {
+    if (transcript.trim() && isListening) {
+      processVitalsFromTranscript(transcript);
+    }
+  }, [transcript, isListening]);
+
+  // Handle speech recognition errors
+  useEffect(() => {
+    if (speechError) {
+      setError(speechError);
+    }
+  }, [speechError]);
 
   const onSave = async () => {
     if (!patientId) return;
@@ -214,68 +197,27 @@ export default function VitalsCapture() {
           <h1 className="text-2xl font-semibold text-slate-900">Vitals Check: {patient?.name ?? "..."}</h1>
         </div>
 
-        <div className="flex items-center gap-3">
-          {speechSupported && (
-            <div className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white p-1">
-              <button
-                onClick={() => setTranscriptionMode("live")}
-                disabled={isRecording}
-                className={[
-                  "rounded-md px-3 py-1.5 text-xs font-semibold transition",
-                  transcriptionMode === "live"
-                    ? "bg-slate-900 text-white"
-                    : "text-slate-600 hover:bg-slate-50",
-                  isRecording ? "cursor-not-allowed opacity-50" : ""
-                ].join(" ")}
-              >
-                Live
-              </button>
-              <button
-                onClick={() => setTranscriptionMode("backend")}
-                disabled={isRecording}
-                className={[
-                  "rounded-md px-3 py-1.5 text-xs font-semibold transition",
-                  transcriptionMode === "backend"
-                    ? "bg-slate-900 text-white"
-                    : "text-slate-600 hover:bg-slate-50",
-                  isRecording ? "cursor-not-allowed opacity-50" : ""
-                ].join(" ")}
-              >
-                Backend
-              </button>
-            </div>
-          )}
-          <button
-            onClick={toggleRecording}
-            disabled={!canRecord}
-            className={[
-              "inline-flex items-center gap-2 rounded-xl px-4 py-2 font-semibold text-white shadow-sm transition",
-              !canRecord ? "cursor-not-allowed bg-slate-400" : "",
-              isRecording ? "bg-red-600 hover:bg-red-700" : "bg-slate-900 hover:bg-slate-800"
-            ].join(" ")}
-          >
-            {isRecording ? <Square className="h-5 w-5" /> : <Mic className="h-5 w-5" />}
-            {isRecording ? "Stop Recording" : "Start Recording"}
-          </button>
-        </div>
+        <button
+          onClick={toggleRecording}
+          disabled={!canRecord}
+          className={[
+            "inline-flex items-center gap-2 rounded-xl px-4 py-2 font-semibold text-white shadow-sm transition",
+            !canRecord ? "cursor-not-allowed bg-slate-400" : "",
+            isListening ? "bg-red-600 hover:bg-red-700" : "bg-slate-900 hover:bg-slate-800"
+          ].join(" ")}
+        >
+          {isListening ? <Square className="h-5 w-5" /> : <Mic className="h-5 w-5" />}
+          {isListening ? "Stop Recording" : "Start Recording"}
+        </button>
       </div>
 
       <div className="grid gap-6 lg:grid-cols-[1.1fr_1fr]">
         <div className="space-y-4">
-          <VoiceVisualizer mediaStream={mediaStream} isRecording={isRecording} />
+          <VoiceVisualizer mediaStream={null} isRecording={isListening} />
 
           <div className="rounded-xl border border-slate-200 bg-white p-4">
             <div className="mb-2 flex items-center justify-between">
               <div className="text-sm font-semibold text-slate-700">Raw Transcription</div>
-              <div className="flex items-center gap-3 text-xs text-slate-600">
-                {transcriptionMode === "live" && speechSupported ? (
-                  <span>{isListening ? "Live transcription (Web Speech) active..." : "Click record to start live transcription"}</span>
-                ) : transcriptionMode === "backend" ? (
-                  <span>Backend transcription (Whisper) will process after recording</span>
-                ) : (
-                  <span>Your browser does not support live speech recognition. Audio will be processed after recording.</span>
-                )}
-              </div>
               {isProcessing && (
                 <div className="inline-flex items-center gap-2 text-sm text-slate-600">
                   <Loader2 className="h-4 w-4 animate-spin" />
@@ -291,11 +233,6 @@ export default function VitalsCapture() {
             />
 
             {error && <div className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>}
-            {speechError && (
-              <div className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">
-                Live transcription issue: {speechError}. You can still rely on backend transcription or type manually.
-              </div>
-            )}
           </div>
         </div>
 

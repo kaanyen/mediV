@@ -75,9 +75,9 @@ export default function LabDashboard() {
                 }}
                 className="grid w-full grid-cols-[1fr_1.2fr_0.5fr] gap-3 px-4 py-4 text-left text-sm hover:bg-slate-50"
               >
-                <div className="font-semibold text-slate-900">{patient?.name ?? "Unknown Patient"}</div>
-                <div className="text-slate-700">{(encounter.labs ?? []).join(", ") || "—"}</div>
-                <div className="text-slate-700">{formatWait(encounter.createdAt, nowTick)}</div>
+                <div className="font-semibold text-slate-900 truncate">{patient?.name ?? "Unknown Patient"}</div>
+                <div className="text-slate-700 truncate">{(encounter.labs ?? []).join(", ") || "—"}</div>
+                <div className="text-slate-700 truncate">{formatWait(encounter.createdAt, nowTick)}</div>
               </button>
             ))
           )}

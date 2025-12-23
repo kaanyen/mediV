@@ -1,4 +1,5 @@
 import React, { createContext, useCallback, useContext, useMemo, useState } from "react";
+import { CheckCircle2, XCircle, Info, X } from "lucide-react";
 
 export type ToastType = "success" | "error" | "info";
 
@@ -26,15 +27,55 @@ export function toast(t: Omit<Toast, "id" | "createdAt">) {
   externalPush?.(t);
 }
 
-function colorFor(type: ToastType): { border: string; bg: string; title: string; text: string } {
+function colorFor(type: ToastType): { 
+  border: string; 
+  bg: string; 
+  title: string; 
+  text: string;
+  iconBg: string;
+  iconColor: string;
+} {
   switch (type) {
     case "success":
-      return { border: "border-emerald-200", bg: "bg-emerald-50", title: "text-emerald-900", text: "text-emerald-800" };
+      return { 
+        border: "border-emerald-300", 
+        bg: "bg-white", 
+        title: "text-emerald-900", 
+        text: "text-emerald-800",
+        iconBg: "bg-emerald-100",
+        iconColor: "text-emerald-600"
+      };
     case "error":
-      return { border: "border-red-200", bg: "bg-red-50", title: "text-red-900", text: "text-red-800" };
+      return { 
+        border: "border-red-300", 
+        bg: "bg-white", 
+        title: "text-red-900", 
+        text: "text-red-800",
+        iconBg: "bg-red-100",
+        iconColor: "text-red-600"
+      };
     case "info":
     default:
-      return { border: "border-blue-200", bg: "bg-blue-50", title: "text-blue-900", text: "text-blue-800" };
+      return { 
+        border: "border-blue-300", 
+        bg: "bg-white", 
+        title: "text-blue-900", 
+        text: "text-blue-800",
+        iconBg: "bg-blue-100",
+        iconColor: "text-blue-600"
+      };
+  }
+}
+
+function getIcon(type: ToastType) {
+  switch (type) {
+    case "success":
+      return CheckCircle2;
+    case "error":
+      return XCircle;
+    case "info":
+    default:
+      return Info;
   }
 }
 
@@ -69,20 +110,61 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
 
       {/* Toast viewport */}
       <div className="pointer-events-none fixed right-4 top-4 z-[9999] flex w-[min(420px,calc(100vw-2rem))] flex-col gap-3">
-        {toasts.map((t) => {
+        {toasts.map((t, index) => {
           const c = colorFor(t.type);
+          const Icon = getIcon(t.type);
           return (
             <div
               key={t.id}
               className={[
-                "pointer-events-auto rounded-2xl border px-4 py-3 shadow-xl",
+                "pointer-events-auto",
+                "rounded-xl border-2 shadow-2xl backdrop-blur-sm",
+                "transform transition-all duration-300 ease-out",
+                "animate-[slideIn_0.3s_ease-out]",
+                "hover:scale-[1.02] hover:shadow-3xl",
                 c.border,
                 c.bg
               ].join(" ")}
               role="status"
+              aria-live="polite"
+              style={{
+                animationDelay: `${index * 50}ms`
+              }}
             >
-              {t.title && <div className={["text-sm font-semibold", c.title].join(" ")}>{t.title}</div>}
-              <div className={["text-sm", c.text].join(" ")}>{t.message}</div>
+              <div className="flex items-start gap-3 px-4 py-3.5">
+                {/* Icon */}
+                <div className={[
+                  "flex-shrink-0 rounded-full p-1.5",
+                  c.iconBg
+                ].join(" ")}>
+                  <Icon className={["h-5 w-5", c.iconColor].join(" ")} />
+                </div>
+                
+                {/* Content */}
+                <div className="flex-1 min-w-0">
+                  {t.title && (
+                    <div className={["text-sm font-bold mb-0.5", c.title].join(" ")}>
+                      {t.title}
+                    </div>
+                  )}
+                  <div className={["text-sm leading-relaxed", c.text].join(" ")}>
+                    {t.message}
+                  </div>
+                </div>
+                
+                {/* Close button */}
+                <button
+                  onClick={() => dismiss(t.id)}
+                  className={[
+                    "flex-shrink-0 rounded-lg p-1 transition-colors",
+                    "hover:bg-slate-100 active:bg-slate-200",
+                    "text-slate-400 hover:text-slate-600"
+                  ].join(" ")}
+                  aria-label="Dismiss notification"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
             </div>
           );
         })}

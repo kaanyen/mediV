@@ -1,14 +1,7 @@
 fastapi
 uvicorn
-python-multipart
-torch
-transformers>=4.50.0
-accelerate
-peft>=0.17.1
-librosa
-soundfile
-numpy
-scipy
-bitsandbytes
+requests>=2.31.0
+pytz>=2023.3
+python-dotenv>=1.0.0
 
 

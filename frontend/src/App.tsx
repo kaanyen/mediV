@@ -7,6 +7,7 @@ import PatientDatabase from "./pages/PatientDatabase";
 import Consultation from "./pages/Consultation";
 import PostLabConsult from "./pages/PostLabConsult";
 import VitalsCapture from "./pages/VitalsCapture";
+import Pharmacy from "./pages/Pharmacy";
 
 export default function App() {
   return (
@@ -20,6 +21,7 @@ export default function App() {
           <Route path="/consultation/:id" element={<Consultation />} />
           <Route path="/post-lab/:id" element={<PostLabConsult />} />
           <Route path="/lab" element={<LabDashboard />} />
+          <Route path="/pharmacy" element={<Pharmacy />} />
         </Routes>
       </AppShell>
     </BrowserRouter>

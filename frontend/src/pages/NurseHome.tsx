@@ -15,8 +15,24 @@ const columns: Column[] = [
   { title: "Waiting for Consult", status: "waiting_for_consult" },
   { title: "In Consult", status: "in_consult" },
   { title: "Waiting for Lab", status: "waiting_for_lab" },
+  { title: "Admitted", status: "admitted" },
+  { title: "Pharmacy", status: "pharmacy" },
   { title: "Discharged", status: "discharged" }
 ];
+
+const getColumnColor = (status: NurseColumnStatus): string => {
+  if (status === "admitted") return "bg-red-50 border-red-200";
+  if (status === "discharged") return "bg-emerald-50 border-emerald-200";
+  if (status === "pharmacy") return "bg-blue-50 border-blue-200";
+  return "bg-white border-slate-200";
+};
+
+const getColumnHeaderColor = (status: NurseColumnStatus): string => {
+  if (status === "admitted") return "bg-red-100 text-red-900 border-red-200";
+  if (status === "discharged") return "bg-emerald-100 text-emerald-900 border-emerald-200";
+  if (status === "pharmacy") return "bg-blue-100 text-blue-900 border-blue-200";
+  return "bg-slate-50 text-slate-800 border-slate-100";
+};
 
 function minutesBetween(iso: string, now = Date.now()): number {
   const t = Date.parse(iso);
@@ -39,6 +55,8 @@ export default function NurseHome() {
     waiting_for_consult: [],
     in_consult: [],
     waiting_for_lab: [],
+    admitted: [],
+    pharmacy: [],
     discharged: []
   });
   const [patientsById, setPatientsById] = useState<Record<string, Patient>>({});
@@ -52,12 +70,14 @@ export default function NurseHome() {
   const [nowTick, setNowTick] = useState(() => Date.now());
 
   const refresh = async () => {
-    const [patients, waiting, inConsult, waitingLab, resultsReady, discharged] = await Promise.all([
+    const [patients, waiting, inConsult, waitingLab, resultsReady, admitted, pharmacy, discharged] = await Promise.all([
       getAllPatients(),
       getEncountersByStatus("waiting_for_consult"),
       getEncountersByStatus("in_consult"),
       getEncountersByStatus("waiting_for_lab"),
       getEncountersByStatus("results_ready"),
+      getEncountersByStatus("admitted"),
+      getEncountersByStatus("pharmacy"),
       getEncountersByStatus("discharged")
     ]);
 
@@ -68,8 +88,10 @@ export default function NurseHome() {
     setEncountersByStatus({
       waiting_for_consult: waiting,
       in_consult: inConsult,
-      // Nurse board still has 4 columns; treat results_ready as part of "Waiting for Lab"
+      // Treat results_ready as part of "Waiting for Lab"
       waiting_for_lab: [...resultsReady, ...waitingLab],
+      admitted,
+      pharmacy,
       discharged
     });
   };
@@ -116,12 +138,14 @@ export default function NurseHome() {
       encountersByStatus.waiting_for_consult.length +
       encountersByStatus.in_consult.length +
       encountersByStatus.waiting_for_lab.length +
+      encountersByStatus.admitted.length +
+      encountersByStatus.pharmacy.length +
       encountersByStatus.discharged.length
     );
   }, [encountersByStatus]);
 
   return (
-    <div className="mx-auto max-w-6xl px-6 py-8">
+    <div className="mx-auto max-w-[1920px] px-4 py-8 sm:px-6">
       <div className="mb-6 flex items-center justify-between gap-4">
         <div>
           <div className="text-sm font-semibold text-slate-500">Active Sessions</div>
@@ -138,20 +162,20 @@ export default function NurseHome() {
         </button>
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-4">
+      <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-6">
         {columns.map((col) => {
           const encounters = encountersByStatus[col.status] ?? [];
           return (
-            <div key={col.status} className="rounded-2xl border border-slate-200 bg-white">
-              <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
-                <div className="text-sm font-semibold text-slate-800">{col.title}</div>
-                <div className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-700">
+            <div key={col.status} className={`rounded-2xl border ${getColumnColor(col.status)} min-w-0 flex flex-col`}>
+              <div className={`flex items-center justify-between border-b px-3 py-2.5 ${getColumnHeaderColor(col.status)} shrink-0`}>
+                <div className="text-xs font-semibold truncate flex-1 min-w-0">{col.title}</div>
+                <div className="rounded-full bg-white/60 px-2 py-0.5 text-xs font-semibold shrink-0 ml-2">
                   {encounters.length}
                 </div>
               </div>
-              <div className="space-y-3 p-4">
+              <div className="space-y-2 p-3 flex-1 min-h-0">
                 {encounters.length === 0 ? (
-                  <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-3 py-6 text-center text-sm text-slate-500">
+                  <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-2 py-4 text-center text-xs text-slate-500">
                     No patients
                   </div>
                 ) : (
@@ -162,15 +186,12 @@ export default function NurseHome() {
                     return (
                       <div
                         key={enc._id}
-                        className="rounded-xl border border-slate-200 bg-white px-3 py-3 shadow-sm"
+                        className="rounded-xl border border-slate-200 bg-white px-2.5 py-2.5 shadow-sm min-w-0"
                       >
-                        <div className="flex items-start justify-between gap-3">
-                          <div>
-                            <div className="text-sm font-semibold text-slate-900">{name}</div>
-                            <div className="mt-1 text-xs text-slate-600">Time waiting: {wait}</div>
-                          </div>
-                          <div className="rounded-lg bg-slate-50 px-2 py-1 text-xs font-semibold text-slate-700">
-                            {col.title}
+                        <div className="flex items-start justify-between gap-2 min-w-0">
+                          <div className="flex-1 min-w-0">
+                            <div className="text-xs font-semibold text-slate-900 truncate">{name}</div>
+                            <div className="mt-1 text-[10px] text-slate-600 break-words">Time: {wait}</div>
                           </div>
                         </div>
                       </div>

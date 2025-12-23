@@ -62,9 +62,9 @@ export default function PatientDatabase() {
                 onClick={() => navigate(`/vitals/${p._id}`)}
                 className="grid w-full grid-cols-[1.2fr_0.5fr_0.5fr] gap-3 px-4 py-4 text-left text-sm hover:bg-slate-50"
               >
-                <div className="font-semibold text-slate-900">{p.name}</div>
-                <div className="text-slate-700">{p.age}</div>
-                <div className="text-slate-700">{p.sex}</div>
+                <div className="font-semibold text-slate-900 truncate">{p.name}</div>
+                <div className="text-slate-700 truncate">{p.age}</div>
+                <div className="text-slate-700 truncate">{p.sex}</div>
               </button>
             ))
           )}

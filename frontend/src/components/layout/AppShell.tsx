@@ -1,19 +1,20 @@
 import { Brain, Database, Wifi, WifiOff } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
-import { toast } from "../ui/toaster";
 import AccessibilityWidget from "../shared/AccessibilityWidget";
 
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
+
 function useOnlineStatus(): boolean {
-  const [online, setOnline] = useState(() => navigator.onLine);
+  const [online, setOnline] = useState(navigator.onLine);
   useEffect(() => {
-    const on = () => setOnline(true);
-    const off = () => setOnline(false);
-    window.addEventListener("online", on);
-    window.addEventListener("offline", off);
+    const handleOnline = () => setOnline(true);
+    const handleOffline = () => setOnline(false);
+    window.addEventListener("online", handleOnline);
+    window.addEventListener("offline", handleOffline);
     return () => {
-      window.removeEventListener("online", on);
-      window.removeEventListener("offline", off);
+      window.removeEventListener("online", handleOnline);
+      window.removeEventListener("offline", handleOffline);
     };
   }, []);
   return online;
@@ -21,56 +22,44 @@ function useOnlineStatus(): boolean {
 
 type AiStatus = "checking" | "ready" | "offline" | "disabled";
 
-// Get API base URL from environment, same as api.ts
-const API_BASE_URL = "https://subcollegiate-mamie-superbrave.ngrok-free.dev";
-
-function useAiStatus(pollMs = 6000): AiStatus {
+function useAiStatus(): AiStatus {
   const [status, setStatus] = useState<AiStatus>("checking");
-  const online = useOnlineStatus();
 
   useEffect(() => {
-    // Skip health checks if we're on HTTPS (production) and API is localhost
-    // This prevents CORS errors on Vercel deployments
-    const isProduction = window.location.protocol === "https:";
-    const isLocalhostApi = API_BASE_URL.includes("localhost") || API_BASE_URL.includes("127.0.0.1");
+    // Disable AI health checks if API is localhost on HTTPS (common in production)
+    const isLocalhostOnHttps = 
+      typeof window !== "undefined" &&
+      window.location.protocol === "https:" &&
+      (API_BASE_URL.includes("localhost") || API_BASE_URL.includes("127.0.0.1"));
 
-    if (isProduction && isLocalhostApi) {
-      if (status !== "disabled") setStatus("disabled");
+    if (isLocalhostOnHttps) {
+      setStatus("disabled");
       return;
     }
 
     let cancelled = false;
-    let lastToastAt = 0;
-
-    async function ping() {
-      if (!online) {
-        if (!cancelled) setStatus("offline");
-        return;
-      }
+    const check = async () => {
       try {
-        const res = await fetch(`${API_BASE_URL}/health`, { method: "GET" });
-        if (!cancelled) setStatus(res.ok ? "ready" : "offline");
+        const url = `${API_BASE_URL}/health`;
+        const res = await fetch(url, {
+          method: "GET",
+        });
+        if (cancelled) return;
+        setStatus(res.ok ? "ready" : "offline");
       } catch {
-        if (!cancelled) setStatus("offline");
-        const now = Date.now();
-        if (now - lastToastAt > 7000) {
-          lastToastAt = now;
-          toast({
-            type: "error",
-            title: "AI Server Offline",
-            message: "Python backend is unreachable. You can continue with manual entry."
-          });
-        }
+        if (cancelled) return;
+        setStatus("offline");
       }
-    }
+    };
 
-    void ping();
-    const id = window.setInterval(() => void ping(), pollMs);
+    check();
+    const interval = setInterval(check, 10000); // Check every 10 seconds
+
     return () => {
       cancelled = true;
-      window.clearInterval(id);
+      clearInterval(interval);
     };
-  }, [online, pollMs, status]);
+  }, []);
 
   return status;
 }
@@ -83,6 +72,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   const active = useMemo(() => {
     const p = location.pathname;
     if (p.startsWith("/lab")) return "Lab";
+    if (p.startsWith("/pharmacy")) return "Pharmacy";
     if (p.startsWith("/doctor") || p.startsWith("/consultation") || p.startsWith("/post-lab")) return "Doctor";
     return "Nurse";
   }, [location.pathname]);
@@ -123,6 +113,15 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
               >
                 Lab
               </Link>
+              <Link
+                to="/pharmacy"
+                className={[
+                  "rounded-xl px-3 py-1.5 text-xs font-semibold",
+                  active === "Pharmacy" ? "bg-slate-900 text-white" : "text-slate-700 hover:bg-slate-50"
+                ].join(" ")}
+              >
+                Pharmacy
+              </Link>
             </div>
           </div>
 
@@ -155,5 +154,4 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     </div>
   );
 }
-
 

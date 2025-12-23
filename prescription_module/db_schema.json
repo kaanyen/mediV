@@ -1,0 +1,12 @@
+[
+  {
+    "id": "gh-001",
+    "generic_name": "artemether-lumefantrine",
+    "indications_tags": ["malaria", "uncomplicated malaria", "plasmodium", "fever", "chills"],
+    "nhis_level": "A",
+    "formulation": "Tablet",
+    "adult_dosage": "80/480 mg twice daily for 3 days",
+    "safety_warning": "Take with fatty food. Avoid in first trimester of pregnancy if possible."
+  }
+]
+

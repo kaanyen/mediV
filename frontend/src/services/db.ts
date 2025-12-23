@@ -114,12 +114,31 @@ export async function saveInitialDiagnosis(
   return updateEncounter(encounterId, { symptoms, initialDiagnosis });
 }
 
+export async function admitEncounter(encounterId: string): Promise<Encounter> {
+  return updateEncounter(encounterId, { 
+    status: "admitted", 
+    admittedAt: new Date().toISOString() 
+  });
+}
+
+export async function sendToPharmacy(encounterId: string, prescriptions: Encounter["prescriptions"]): Promise<Encounter> {
+  return updateEncounter(encounterId, { 
+    status: "pharmacy", 
+    prescriptions 
+  });
+}
+
 export async function dischargeEncounter(
   encounterId: string,
   finalDiagnosis: Encounter["finalDiagnosis"],
   finalAnalysis: string
 ): Promise<Encounter> {
-  return updateEncounter(encounterId, { status: "discharged", finalDiagnosis, finalAnalysis });
+  return updateEncounter(encounterId, { 
+    status: "discharged", 
+    finalDiagnosis, 
+    finalAnalysis,
+    dischargedAt: new Date().toISOString()
+  });
 }
 
 export async function getAllPatients(): Promise<Patient[]> {

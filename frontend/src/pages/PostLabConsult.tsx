@@ -1,10 +1,11 @@
-import { Loader2, ShieldCheck, Stethoscope } from "lucide-react";
+import { Loader2, ShieldCheck, Stethoscope, Hospital, Home, Pill } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import DiagnosisCard, { type Diagnosis } from "../components/DiagnosisCard";
+import PrescriptionModal from "../components/PrescriptionModal";
 import { confirmDiagnosis } from "../services/api";
-import { dischargeEncounter, getEncounterById, getPatientById } from "../services/db";
-import type { Encounter, Patient } from "../types/schema";
+import { admitEncounter, dischargeEncounter, getEncounterById, getPatientById, sendToPharmacy } from "../services/db";
+import type { Encounter, Patient, Prescription } from "../types/schema";
 
 function labValueTone(v: string): "pos" | "neg" | "neutral" {
   const s = (v || "").toLowerCase();
@@ -30,6 +31,7 @@ export default function PostLabConsult() {
 
   const [overrideOpen, setOverrideOpen] = useState(false);
   const [overrideText, setOverrideText] = useState("");
+  const [prescriptionModalOpen, setPrescriptionModalOpen] = useState(false);
 
   useEffect(() => {
     const run = async () => {
@@ -83,6 +85,12 @@ export default function PostLabConsult() {
 
   const labEntries = useMemo(() => Object.entries(encounter?.labResults ?? {}), [encounter?.labResults]);
 
+  const onAdmit = async () => {
+    if (!id || !encounter) return;
+    await admitEncounter(id);
+    navigate("/doctor");
+  };
+
   const onDischarge = async () => {
     if (!id || !encounter) return;
     const useDx: Diagnosis[] =
@@ -90,7 +98,18 @@ export default function PostLabConsult() {
         ? [{ condition: overrideText.trim(), probability: 1, reasoning: "Doctor override." }]
         : (finalDx ?? []);
     await dischargeEncounter(id, useDx, analysis || "Discharged after lab review.");
-    navigate("/");
+    navigate("/doctor");
+  };
+
+  const onPrescribe = async (prescriptions: Prescription[]) => {
+    if (!id) return;
+    const prescriptionsWithTimestamp: Prescription[] = prescriptions.map(p => ({
+      ...p,
+      prescribedAt: new Date().toISOString(),
+      dispensed: false
+    }));
+    await sendToPharmacy(id, prescriptionsWithTimestamp);
+    navigate("/doctor");
   };
 
   if (loadError) {
@@ -220,18 +239,36 @@ export default function PostLabConsult() {
                 placeholder='e.g. "severe headache, chills..."'
               />
             </div>
-            <div className="flex items-center gap-3">
+            <div className="space-y-3">
               <button
-                onClick={() => void onDischarge()}
-                className="inline-flex flex-1 items-center justify-center rounded-xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700"
+                onClick={() => setPrescriptionModalOpen(true)}
+                disabled={!finalDx || finalDx.length === 0}
+                className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:bg-slate-400"
               >
-                Accept & Discharge
+                <Pill className="h-4 w-4" />
+                Generate Prescription
               </button>
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={() => void onAdmit()}
+                  className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-700"
+                >
+                  <Hospital className="h-4 w-4" />
+                  Admit Patient
+                </button>
+                <button
+                  onClick={() => void onDischarge()}
+                  className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700"
+                >
+                  <Home className="h-4 w-4" />
+                  Discharge
+                </button>
+              </div>
               <button
                 onClick={() => setOverrideOpen((v) => !v)}
-                className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-800 hover:bg-slate-50"
+                className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-800 hover:bg-slate-50"
               >
-                Override
+                Override Diagnosis
               </button>
             </div>
             {overrideOpen && (
@@ -248,6 +285,17 @@ export default function PostLabConsult() {
           </div>
         </div>
       </div>
+
+      {prescriptionModalOpen && finalDx && finalDx.length > 0 && (
+        <PrescriptionModal
+          condition={finalDx[0].condition}
+          diagnosis={finalDx[0].reasoning}
+          patientWeight={encounter?.vitals?.weight}
+          age={patient?.age?.toString()}
+          onClose={() => setPrescriptionModalOpen(false)}
+          onPrescribe={onPrescribe}
+        />
+      )}
     </div>
   );
 }

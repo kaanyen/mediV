@@ -4,9 +4,8 @@ import { useNavigate, useParams } from "react-router-dom";
 import DiagnosisCard, { type Diagnosis } from "../components/DiagnosisCard";
 import LabRequestModal from "../components/LabRequestModal";
 import VoiceVisualizer from "../components/VoiceVisualizer";
-import { useAudioRecorder } from "../hooks/useAudioRecorder";
 import { useSpeechRecognition } from "../hooks/useSpeechRecognition";
-import { getDiagnosis, processAudio } from "../services/api";
+import { getDiagnosis } from "../services/api";
 import { getEncounterById, getPatientById, saveInitialDiagnosis, updateEncounterToLab } from "../services/db";
 import type { Encounter, Patient } from "../types/schema";
 
@@ -30,18 +29,14 @@ export default function Consultation() {
   const [patient, setPatient] = useState<Patient | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
 
-  const { isRecording, audioBlob, mediaStream, startRecording, stopRecording } = useAudioRecorder();
-  const [isTranscribing, setIsTranscribing] = useState(false);
-
   const {
-    supported: speechSupported,
-    isListening,
-    transcript: liveTranscript,
+    transcript,
     interimTranscript,
+    isListening,
     error: speechError,
-    start: startSpeech,
-    stop: stopSpeech,
-    reset: resetSpeech
+    startListening,
+    stopListening,
+    resetTranscript,
   } = useSpeechRecognition();
 
   const [symptoms, setSymptoms] = useState("");
@@ -49,16 +44,18 @@ export default function Consultation() {
   const [isDiagnosing, setIsDiagnosing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [manualDiagnosis, setManualDiagnosis] = useState("");
-  const [transcriptionMode, setTranscriptionMode] = useState<"live" | "backend">(
-    speechSupported ? "live" : "backend"
-  );
 
   const [labModalOpen, setLabModalOpen] = useState(false);
 
   const clearFlashTimeout = useRef<number | null>(null);
   const [flashSymptoms, setFlashSymptoms] = useState(false);
 
-  const canRecord = useMemo(() => !isTranscribing && !isDiagnosing, [isDiagnosing, isTranscribing]);
+  const canRecord = useMemo(() => !isDiagnosing, [isDiagnosing]);
+
+  // Update symptoms display with live transcription
+  useEffect(() => {
+    setSymptoms(transcript + (interimTranscript ? ` ${interimTranscript}` : ""));
+  }, [transcript, interimTranscript]);
 
   useEffect(() => {
     const run = async () => {
@@ -78,77 +75,22 @@ export default function Consultation() {
     void run();
   }, [id]);
 
-  const toggleRecording = async () => {
+  const toggleRecording = () => {
     setError(null);
-    if (speechError) {
-      resetSpeech();
-    }
-    if (!canRecord) return;
-
-    if (isRecording) {
-      stopRecording();
-      if (speechSupported && transcriptionMode === "live") {
-        stopSpeech();
-      }
-      return;
-    }
-
-    try {
-      resetSpeech();
-      setSymptoms("");
-      await startRecording();
-      if (speechSupported && transcriptionMode === "live") {
-        startSpeech();
-      }
-    } catch {
-      setError("Microphone access failed. Please allow microphone permissions in your browser.");
+    if (isListening) {
+      stopListening();
+    } else {
+      resetTranscript();
+      startListening();
     }
   };
 
-  // While recording, sync textarea with live Web Speech transcript (only in live mode)
+  // Handle speech recognition errors
   useEffect(() => {
-    if (!isRecording || !speechSupported || transcriptionMode !== "live") return;
-    const combined = [liveTranscript, interimTranscript].filter(Boolean).join(" ").trim();
-    if (combined) {
-      setSymptoms(combined);
+    if (speechError) {
+      setError(speechError);
     }
-  }, [isRecording, speechSupported, transcriptionMode, liveTranscript, interimTranscript]);
-
-  useEffect(() => {
-    if (!audioBlob) return;
-    let cancelled = false;
-
-    const run = async () => {
-      setIsTranscribing(true);
-      setError(null);
-      try {
-        const res = await processAudio(audioBlob);
-        if (cancelled) return;
-        if (!res) {
-          setError("AI Server Disconnected. You can type symptoms manually.");
-          return;
-        }
-        // In backend mode, replace symptoms. In live mode, keep live transcript
-        if (transcriptionMode === "backend") {
-          const next = res.transcription ?? "";
-          setSymptoms(next);
-          setFlashSymptoms(true);
-          if (clearFlashTimeout.current) window.clearTimeout(clearFlashTimeout.current);
-          clearFlashTimeout.current = window.setTimeout(() => setFlashSymptoms(false), 1200);
-        }
-      } catch {
-        if (cancelled) return;
-        setError("Transcription failed. You can type symptoms manually.");
-      } finally {
-        if (!cancelled) setIsTranscribing(false);
-      }
-    };
-
-    void run();
-    return () => {
-      cancelled = true;
-    };
-  }, [audioBlob, transcriptionMode]);
+  }, [speechError]);
 
   const onDiagnose = async () => {
     if (!encounter) return;
@@ -211,50 +153,18 @@ export default function Consultation() {
           <h1 className="text-2xl font-semibold text-slate-900">{patient?.name ?? "Patient"}</h1>
           <div className="mt-1 text-sm text-slate-600">{patient ? `${patient.age} • ${patient.sex}` : "Patient details missing"}</div>
         </div>
-        <div className="flex items-center gap-3">
-          {speechSupported && (
-            <div className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white p-1">
-              <button
-                onClick={() => setTranscriptionMode("live")}
-                disabled={isRecording}
-                className={[
-                  "rounded-md px-3 py-1.5 text-xs font-semibold transition",
-                  transcriptionMode === "live"
-                    ? "bg-slate-900 text-white"
-                    : "text-slate-600 hover:bg-slate-50",
-                  isRecording ? "cursor-not-allowed opacity-50" : ""
-                ].join(" ")}
-              >
-                Live
-              </button>
-              <button
-                onClick={() => setTranscriptionMode("backend")}
-                disabled={isRecording}
-                className={[
-                  "rounded-md px-3 py-1.5 text-xs font-semibold transition",
-                  transcriptionMode === "backend"
-                    ? "bg-slate-900 text-white"
-                    : "text-slate-600 hover:bg-slate-50",
-                  isRecording ? "cursor-not-allowed opacity-50" : ""
-                ].join(" ")}
-              >
-                Backend
-              </button>
-            </div>
-          )}
-          <button
-            onClick={toggleRecording}
-            disabled={!canRecord}
-            className={[
-              "inline-flex items-center gap-2 rounded-xl px-4 py-2 font-semibold text-white shadow-sm transition",
-              !canRecord ? "cursor-not-allowed bg-slate-400" : "",
-              isRecording ? "bg-red-600 hover:bg-red-700" : "bg-slate-900 hover:bg-slate-800"
-            ].join(" ")}
-          >
-            {isRecording ? <Square className="h-5 w-5" /> : <Mic className="h-5 w-5" />}
-            {isRecording ? "Stop Recording" : "Start Recording"}
-          </button>
-        </div>
+        <button
+          onClick={toggleRecording}
+          disabled={!canRecord}
+          className={[
+            "inline-flex items-center gap-2 rounded-xl px-4 py-2 font-semibold text-white shadow-sm transition",
+            !canRecord ? "cursor-not-allowed bg-slate-400" : "",
+            isListening ? "bg-red-600 hover:bg-red-700" : "bg-slate-900 hover:bg-slate-800"
+          ].join(" ")}
+        >
+          {isListening ? <Square className="h-5 w-5" /> : <Mic className="h-5 w-5" />}
+          {isListening ? "Stop Recording" : "Start Recording"}
+        </button>
       </div>
 
       <div className="grid gap-6 lg:grid-cols-[1.1fr_0.9fr]">
@@ -269,26 +179,15 @@ export default function Consultation() {
             </div>
           </div>
 
-          <VoiceVisualizer mediaStream={mediaStream} isRecording={isRecording} />
+          <VoiceVisualizer mediaStream={null} isRecording={isListening} />
 
           <div className="rounded-2xl border border-slate-200 bg-white p-4">
             <div className="mb-2 flex items-center justify-between">
-              <div className="flex flex-col gap-1">
-                <div className="text-sm font-semibold text-slate-700">History of Present Illness / Symptoms</div>
-                <div className="text-xs text-slate-600">
-                  {transcriptionMode === "live" && speechSupported
-                    ? isListening
-                      ? "Live transcription (Web Speech) is capturing as you speak..."
-                      : "Click record to start live transcription, or type symptoms manually."
-                    : transcriptionMode === "backend"
-                    ? "Backend transcription (Whisper) will process after recording"
-                    : "Your browser does not support live speech recognition; audio will be transcribed after recording."}
-                </div>
-              </div>
-              {(isTranscribing || isDiagnosing) && (
+              <div className="text-sm font-semibold text-slate-700">History of Present Illness / Symptoms</div>
+              {isDiagnosing && (
                 <div className="inline-flex items-center gap-2 text-sm text-slate-600">
                   <Loader2 className="h-4 w-4 animate-spin" />
-                  {isTranscribing ? "Transcribing..." : "Diagnosing..."}
+                  Diagnosing...
                 </div>
               )}
             </div>
@@ -302,11 +201,6 @@ export default function Consultation() {
               ].join(" ")}
             />
             {error && <div className="mt-3 rounded-xl bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>}
-            {speechError && (
-              <div className="mt-2 rounded-xl bg-amber-50 px-3 py-2 text-xs text-amber-800">
-                Live transcription issue: {speechError}. You can still rely on backend transcription or type manually.
-              </div>
-            )}
           </div>
         </div>
 

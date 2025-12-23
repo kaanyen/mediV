@@ -71,11 +71,11 @@ export default function DoctorHome() {
               }
               className="flex w-full items-center justify-between gap-4 rounded-2xl border border-slate-200 bg-white px-5 py-4 text-left shadow-sm hover:bg-slate-50"
             >
-              <div className="min-w-0">
-                <div className="text-sm font-semibold text-slate-900">
+              <div className="min-w-0 flex-1">
+                <div className="text-sm font-semibold text-slate-900 truncate">
                   {patient?.name ?? "Unknown Patient"}
                 </div>
-                <div className="mt-1 text-sm text-slate-600">
+                <div className="mt-1 text-sm text-slate-600 truncate">
                   {patient ? `${patient.age} • ${patient.sex}` : "Patient details missing"}
                 </div>
                 {encounter.status === "results_ready" && (

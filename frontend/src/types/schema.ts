@@ -3,7 +3,9 @@ export type EncounterStatus =
   | "in_consult"
   | "waiting_for_lab"
   | "results_ready"
-  | "discharged";
+  | "admitted"
+  | "discharged"
+  | "pharmacy";
 
 export interface Patient {
   _id: string; // UUID
@@ -31,8 +33,37 @@ export interface Encounter {
   finalAnalysis?: string;
   labs?: string[]; // Doctor lab requests
   labResults: Record<string, string>;
+  prescriptions?: Prescription[];
+  admittedAt?: string;
+  dischargedAt?: string;
   createdAt: string;
   synced: boolean;
+}
+
+export interface Prescription {
+  medication: string;
+  dosage: string;
+  frequency: string;
+  duration: string;
+  instructions?: string;
+  warnings?: string;
+  prescribedAt: string;
+  dispensed?: boolean;
+}
+
+export interface Drug {
+  _id: string;
+  name: string;
+  genericName?: string;
+  category: string;
+  dosageForm: string; // e.g., "tablet", "syrup", "injection"
+  strength: string; // e.g., "500mg", "10ml"
+  stock: number;
+  unit: string; // e.g., "tablets", "bottles", "vials"
+  expiryDate?: string;
+  supplier?: string;
+  price?: number;
+  createdAt: string;
 }
 
 

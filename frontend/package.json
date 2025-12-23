@@ -12,6 +12,8 @@
     "axios": "^1.7.9",
     "events": "^3.3.0",
     "framer-motion": "^11.18.0",
+    "jspdf": "^3.0.4",
+    "jspdf-autotable": "^5.0.2",
     "lucide-react": "^0.468.0",
     "pouchdb-browser": "^9.0.0",
     "pouchdb-find": "^9.0.0",
