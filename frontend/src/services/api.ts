@@ -184,11 +184,24 @@ export async function listDrugs(): Promise<DrugListResponse | null> {
   try {
     const res = await api.get<DrugListResponse>("/drugs");
     console.log("[API] listDrugs response:", res.data);
-    // Check if we got HTML instead of JSON (wrong URL)
-    if (typeof res.data === 'string' || (res.data && typeof res.data === 'object' && !res.data.drugs)) {
-      console.error("[API] Got HTML response instead of JSON. API_BASE_URL might be wrong:", API_BASE_URL);
-      console.error("[API] Response was:", typeof res.data === 'string' ? res.data.substring(0, 200) : res.data);
-      return null;
+    // Check if we got HTML instead of JSON (wrong URL pointing to frontend)
+    const data = res.data as any;
+    if (typeof data === 'string') {
+      if (data.includes('<!doctype html>') || data.includes('<html')) {
+        console.error("[API] ❌ Got HTML response instead of JSON!");
+        console.error("[API] This means API_BASE_URL is pointing to the frontend, not the backend");
+        console.error("[API] Current API_BASE_URL:", API_BASE_URL);
+        console.error("[API] Response preview:", data.substring(0, 200));
+        return null;
+      }
+    } else if (data && typeof data === 'object' && !('drugs' in data)) {
+      const dataStr = JSON.stringify(data);
+      if (dataStr.includes('<!doctype html>') || dataStr.includes('<html')) {
+        console.error("[API] ❌ Got HTML response instead of JSON!");
+        console.error("[API] Current API_BASE_URL:", API_BASE_URL);
+        console.error("[API] Response preview:", dataStr.substring(0, 200));
+        return null;
+      }
     }
     return res.data;
   } catch (error) {
